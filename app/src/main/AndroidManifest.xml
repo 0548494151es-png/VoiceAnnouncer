@@ -4,6 +4,10 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
         <intent>
@@ -31,7 +35,7 @@
             </intent-filter>
         </activity>
 
-        <!-- קורא הודעות מכל האפליקציות. המערכת מפעילה אותו לבד גם כשהאפליקציה סגורה -->
+        <!-- קורא הודעות מכל האפליקציות -->
         <service
             android:name=".MessageListener"
             android:exported="true"
@@ -42,12 +46,32 @@
             </intent-filter>
         </service>
 
+        <!-- שירות רקע קבוע: מחזיק את האפליקציה חיה גם כשהיא סגורה -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="reads incoming calls and messages aloud" />
+        </service>
+
         <!-- מזהה שיחות נכנסות -->
         <receiver
             android:name=".CallReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.PHONE_STATE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- מפעיל את השירות אחרי הדלקת הטלפון ואחרי עדכון האפליקציה -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
     </application>

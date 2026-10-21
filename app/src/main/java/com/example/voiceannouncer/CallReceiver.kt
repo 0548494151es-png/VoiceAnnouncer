@@ -16,6 +16,8 @@ class CallReceiver : BroadcastReceiver() {
         if (intent.action != TelephonyManager.ACTION_PHONE_STATE_CHANGED) return
         when (intent.getStringExtra(TelephonyManager.EXTRA_STATE)) {
             TelephonyManager.EXTRA_STATE_RINGING -> {
+                // מוודא שהשירות הקבוע פעיל, כדי שהתהליך לא ייסגר באמצע ההכרזה
+                KeepAliveService.start(context)
                 @Suppress("DEPRECATION")
                 val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
                 CallAnnouncer.onRinging(context.applicationContext, number)
@@ -30,22 +32,30 @@ class CallReceiver : BroadcastReceiver() {
 object CallAnnouncer {
     private val handler = Handler(Looper.getMainLooper())
     private var ringing = false
+    private var ringStart = 0L
     private var numberKnown = false
+    private var waitingForName = false
     private var repeats = 0
     private var phrase: String? = null
+    private var notifName: String? = null
+    private var notifTime = 0L
     private var repeatRunnable: Runnable? = null
     private var hiddenRunnable: Runnable? = null
+    private var waitRunnable: Runnable? = null
 
     fun onRinging(ctx: Context, number: String?) {
         val prefs = Prefs(ctx)
         if (!prefs.enabled || !prefs.announceCalls) return
 
-        if (!ringing) {
+        // אם המערכת פספסה את סיום השיחה הקודמת, המצב מתאפס אחרי דקה
+        if (!ringing || System.currentTimeMillis() - ringStart > 60000) {
+            clearTimers()
             ringing = true
+            ringStart = System.currentTimeMillis()
             numberKnown = false
+            waitingForName = false
             repeats = 0
             phrase = null
-            // המערכת שולחת את המספר בשידור שני; אם לא הגיע - מספר חסוי (או שאין הרשאת יומן שיחות)
             val hasCallLog = ctx.checkSelfPermission(Manifest.permission.READ_CALL_LOG) ==
                 PackageManager.PERMISSION_GRANTED
             val r = Runnable {
@@ -60,23 +70,64 @@ object CallAnnouncer {
         if (!number.isNullOrBlank() && !numberKnown) {
             numberKnown = true
             hiddenRunnable?.let { handler.removeCallbacks(it) }
+
             val name = lookupName(ctx, number)
-            val who = name ?: ("מספר " + number.filter { it.isDigit() }.toCharArray().joinToString(" "))
-            start(ctx, "שיחה נכנסת, ${who}")
+            if (name != null) {
+                start(ctx, "שיחה נכנסת, ${name}")
+                return
+            }
+
+            val recent = notifName
+            if (recent != null && System.currentTimeMillis() - notifTime < 5000) {
+                start(ctx, "שיחה נכנסת, ${recent}")
+                return
+            }
+
+            // לא נמצא באנשי הקשר: מחכים רגע לשם מהתראת השיחה (למשל טרוקולר)
+            val digits = number.filter { it.isDigit() }.toCharArray().joinToString(" ")
+            waitingForName = true
+            val w = Runnable {
+                if (ringing && waitingForName) {
+                    waitingForName = false
+                    start(ctx, "שיחה נכנסת, מספר ${digits}")
+                }
+            }
+            waitRunnable = w
+            handler.postDelayed(w, 2000)
+        }
+    }
+
+    /** נקרא מ-MessageListener כשמגיעה התראת שיחה עם שם */
+    fun onCallNotificationName(ctx: Context, name: String) {
+        val app = ctx.applicationContext
+        handler.post {
+            notifName = name
+            notifTime = System.currentTimeMillis()
+            if (ringing && waitingForName) {
+                waitingForName = false
+                waitRunnable?.let { handler.removeCallbacks(it) }
+                start(app, "שיחה נכנסת, ${name}")
+            }
         }
     }
 
     fun onStopped() {
         ringing = false
         numberKnown = false
-        hiddenRunnable?.let { handler.removeCallbacks(it) }
-        repeatRunnable?.let { handler.removeCallbacks(it) }
+        waitingForName = false
+        notifName = null
+        clearTimers()
         Speaker.stop()
+    }
+
+    private fun clearTimers() {
+        hiddenRunnable?.let { handler.removeCallbacks(it) }
+        waitRunnable?.let { handler.removeCallbacks(it) }
+        repeatRunnable?.let { handler.removeCallbacks(it) }
     }
 
     private fun start(ctx: Context, text: String) {
         phrase = text
-        // שיחות נכנסות מוכרזות גם בשעות שקט
         Speaker.announce(ctx, text, ignoreQuiet = true)
         scheduleRepeat(ctx)
     }

@@ -15,6 +15,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("bluetoothOnly", true)
         set(v) { sp.edit().putBoolean("bluetoothOnly", v).apply() }
 
+    /** שירות רקע קבוע, כדי שיעבוד גם כשהאפליקציה סגורה */
+    var keepAlive: Boolean
+        get() = sp.getBoolean("keepAlive", true)
+        set(v) { sp.edit().putBoolean("keepAlive", v).apply() }
+
     var announceCalls: Boolean
         get() = sp.getBoolean("announceCalls", true)
         set(v) { sp.edit().putBoolean("announceCalls", v).apply() }

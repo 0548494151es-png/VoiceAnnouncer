@@ -7,6 +7,7 @@ import android.app.TimePickerDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
@@ -28,11 +29,13 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         buildUi()
+        KeepAliveService.start(this)
     }
 
     override fun onResume() {
         super.onResume()
         updateStatus()
+        KeepAliveService.start(this)
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
@@ -56,15 +59,13 @@ class MainActivity : Activity() {
         addButton("1. הפעלת גישה להתראות (לקריאת הודעות)") {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
-        addButton("2. אישור הרשאות (שיחות ואנשי קשר)") {
-            requestPermissions(
-                arrayOf(
-                    Manifest.permission.READ_PHONE_STATE,
-                    Manifest.permission.READ_CALL_LOG,
-                    Manifest.permission.READ_CONTACTS
-                ),
-                1
-            )
+        addButton("2. אישור הרשאות (שיחות, אנשי קשר והתראות)") {
+            val perms = ArrayList<String>()
+            perms.add(Manifest.permission.READ_PHONE_STATE)
+            perms.add(Manifest.permission.READ_CALL_LOG)
+            perms.add(Manifest.permission.READ_CONTACTS)
+            if (Build.VERSION.SDK_INT >= 33) perms.add(Manifest.permission.POST_NOTIFICATIONS)
+            requestPermissions(perms.toTypedArray(), 1)
         }
         addButton("3. ביטול חיסכון בסוללה (כדי שימשיך לעבוד ברקע)") {
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
@@ -72,6 +73,10 @@ class MainActivity : Activity() {
 
         addHeader("כללי")
         addSwitch("הקראה פעילה", prefs.enabled) { prefs.enabled = it }
+        addSwitch("שירות רקע קבוע (מומלץ, כדי שיעבוד כשהאפליקציה סגורה)", prefs.keepAlive) {
+            prefs.keepAlive = it
+            if (it) KeepAliveService.start(this) else KeepAliveService.stop(this)
+        }
         addSwitch("הקראה רק כשמחובר התקן בלוטוס", prefs.bluetoothOnly) {
             prefs.bluetoothOnly = it
             updateStatus()
@@ -125,6 +130,12 @@ class MainActivity : Activity() {
         root.addView(endBtn)
     }
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        updateStatus()
+        KeepAliveService.start(this)
+    }
+
     private fun updateStatus() {
         val listener = isListenerEnabled()
         val perms = listOf(
@@ -136,6 +147,7 @@ class MainActivity : Activity() {
         statusView.text = buildString {
             append(if (listener) "✔ גישה להתראות: פעילה\n" else "✘ גישה להתראות: כבויה (לחץ על כפתור 1)\n")
             append(if (perms) "✔ הרשאות שיחות ואנשי קשר: אושרו\n" else "✘ הרשאות שיחות ואנשי קשר: חסרות (לחץ על כפתור 2)\n")
+            append(if (prefs.keepAlive) "✔ שירות רקע קבוע: פעיל\n" else "• שירות רקע קבוע: כבוי\n")
             append(if (bt) "✔ בלוטוס: מחובר התקן שמע" else "• בלוטוס: אין התקן שמע מחובר")
         }
     }

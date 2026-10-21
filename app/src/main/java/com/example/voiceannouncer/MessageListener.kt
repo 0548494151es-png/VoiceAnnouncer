@@ -6,12 +6,16 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 
 /**
- * שירות האזנה להתראות. המערכת מקשרת אותו לבד (גם אחרי הפעלה מחדש של הטלפון)
- * ולכן הקריאה ממשיכה לעבוד כשחלון האפליקציה סגור.
+ * שירות האזנה להתראות. המערכת מקשרת אותו לבד (גם אחרי הפעלה מחדש של הטלפון).
  */
 class MessageListener : NotificationListenerService() {
 
     private val recent = HashMap<String, Long>()
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        KeepAliveService.start(this)
+    }
 
     override fun onListenerDisconnected() {
         NotificationListenerService.requestRebind(ComponentName(this, MessageListener::class.java))
@@ -20,17 +24,31 @@ class MessageListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
         val prefs = Prefs(this)
-        if (!prefs.enabled || !prefs.announceMessages) return
+        if (!prefs.enabled) return
 
         val pkg = sbn.packageName
-        if (pkg == packageName || pkg in prefs.blockedApps) return
+        if (pkg == packageName) return
 
         val n = sbn.notification ?: return
+
+        // התראת שיחה: אם יש בה שם (ולא רק מספר), מעבירים אותו להכרזת השיחה
+        if (n.category == Notification.CATEGORY_CALL) {
+            if (prefs.announceCalls) {
+                val callTitle = n.extras?.getCharSequence(Notification.EXTRA_TITLE)
+                    ?.toString()?.trim().orEmpty()
+                if (callTitle.any { it.isLetter() }) {
+                    CallAnnouncer.onCallNotificationName(this, callTitle)
+                }
+            }
+            return
+        }
+
+        if (!prefs.announceMessages) return
+        if (pkg in prefs.blockedApps) return
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         if (n.flags and Notification.FLAG_ONGOING_EVENT != 0) return
 
         val category = n.category
-        if (category == Notification.CATEGORY_CALL) return
         if (!prefs.readAllNotifications) {
             val isMessage = category == Notification.CATEGORY_MESSAGE ||
                 category == Notification.CATEGORY_EMAIL ||
