@@ -77,6 +77,9 @@ class MainActivity : Activity() {
             prefs.keepAlive = it
             if (it) KeepAliveService.start(this) else KeepAliveService.stop(this)
         }
+        addSwitch("לא להקריא כשהטלפון במצב שקט או רטט", prefs.respectSilent) {
+            prefs.respectSilent = it
+        }
         addSwitch("הקראה רק כשמחובר התקן בלוטוס", prefs.bluetoothOnly) {
             prefs.bluetoothOnly = it
             updateStatus()
@@ -100,6 +103,7 @@ class MainActivity : Activity() {
                 Speaker.Result.DISABLED -> "הקראה כבויה"
                 Speaker.Result.NO_BLUETOOTH -> "אין התקן בלוטוס מחובר"
                 Speaker.Result.QUIET_HOURS -> "שעות שקט"
+                Speaker.Result.SILENT_MODE -> "הטלפון במצב שקט או רטט"
             }
             Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         }

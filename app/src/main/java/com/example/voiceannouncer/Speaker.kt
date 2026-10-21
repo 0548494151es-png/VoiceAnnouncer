@@ -11,7 +11,7 @@ import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
 object Speaker {
-    enum class Result { SPOKEN, DISABLED, QUIET_HOURS, NO_BLUETOOTH }
+    enum class Result { SPOKEN, DISABLED, QUIET_HOURS, NO_BLUETOOTH, SILENT_MODE }
 
     private var tts: TextToSpeech? = null
     private var ready = false
@@ -59,6 +59,7 @@ object Speaker {
     fun announce(context: Context, text: String, ignoreQuiet: Boolean = false): Result {
         val prefs = Prefs(context)
         if (!prefs.enabled) return Result.DISABLED
+        if (prefs.respectSilent && isPhoneSilent(context)) return Result.SILENT_MODE
         if (!ignoreQuiet && prefs.isQuietNow()) return Result.QUIET_HOURS
         if (prefs.bluetoothOnly && !isBluetoothAudioConnected(context)) return Result.NO_BLUETOOTH
         if (ready) speakNow(text) else if (pending.size < 20) pending.add(text)
@@ -69,6 +70,12 @@ object Speaker {
     fun stop() {
         tts?.stop()
         abandonFocus()
+    }
+
+    /** הטלפון במצב שקט או רטט */
+    fun isPhoneSilent(context: Context): Boolean {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        return am.ringerMode != AudioManager.RINGER_MODE_NORMAL
     }
 
     fun isBluetoothAudioConnected(context: Context): Boolean {
