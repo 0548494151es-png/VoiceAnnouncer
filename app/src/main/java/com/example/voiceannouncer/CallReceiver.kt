@@ -20,6 +20,7 @@ class CallReceiver : BroadcastReceiver() {
                 KeepAliveService.start(context)
                 @Suppress("DEPRECATION")
                 val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
+                LogStore.add("שיחה נכנסת: " + (if (number.isNullOrBlank()) "התקבל בלי מספר" else "התקבל עם מספר"))
                 CallAnnouncer.onRinging(context.applicationContext, number)
             }
             TelephonyManager.EXTRA_STATE_IDLE,
@@ -45,7 +46,10 @@ object CallAnnouncer {
 
     fun onRinging(ctx: Context, number: String?) {
         val prefs = Prefs(ctx)
-        if (!prefs.enabled || !prefs.announceCalls) return
+        if (!prefs.enabled || !prefs.announceCalls) {
+            LogStore.add("שיחה: דולגה, כבויה בהגדרות")
+            return
+        }
 
         // אם המערכת פספסה את סיום השיחה הקודמת, המצב מתאפס אחרי דקה
         if (!ringing || System.currentTimeMillis() - ringStart > 60000) {
@@ -112,6 +116,7 @@ object CallAnnouncer {
     }
 
     fun onStopped() {
+        if (ringing) LogStore.add("שיחה: הסתיימה או נענתה")
         ringing = false
         numberKnown = false
         waitingForName = false

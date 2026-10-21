@@ -14,10 +14,12 @@ class MessageListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        LogStore.add("שירות ההתראות התחבר")
         KeepAliveService.start(this)
     }
 
     override fun onListenerDisconnected() {
+        LogStore.add("שירות ההתראות התנתק, מנסה להתחבר מחדש")
         NotificationListenerService.requestRebind(ComponentName(this, MessageListener::class.java))
     }
 
@@ -44,7 +46,10 @@ class MessageListener : NotificationListenerService() {
         }
 
         if (!prefs.announceMessages) return
-        if (pkg in prefs.blockedApps) return
+        if (pkg in prefs.blockedApps) {
+            LogStore.add("התראה מ-$pkg דולגה: האפליקציה חסומה")
+            return
+        }
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         if (n.flags and Notification.FLAG_ONGOING_EVENT != 0) return
 
@@ -53,7 +58,10 @@ class MessageListener : NotificationListenerService() {
             val isMessage = category == Notification.CATEGORY_MESSAGE ||
                 category == Notification.CATEGORY_EMAIL ||
                 category == Notification.CATEGORY_SOCIAL
-            if (!isMessage) return
+            if (!isMessage) {
+                LogStore.add("התראה מ-$pkg דולגה: לא מסומנת כהודעה (${category ?: "ללא סוג"})")
+                return
+            }
         }
 
         val extras = n.extras ?: return

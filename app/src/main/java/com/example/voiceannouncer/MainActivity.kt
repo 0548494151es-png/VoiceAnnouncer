@@ -55,6 +55,8 @@ class MainActivity : Activity() {
         statusView.setPadding(0, dp(4), 0, dp(12))
         root.addView(statusView)
 
+        addButton("יומן פעילות (לבדיקת תקלות)") { showLog() }
+
         addHeader("הרשאות והפעלה")
         addButton("1. הפעלת גישה להתראות (לקריאת הודעות)") {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
@@ -138,6 +140,22 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         updateStatus()
         KeepAliveService.start(this)
+    }
+
+    private fun showLog() {
+        val tv = TextView(this)
+        tv.text = LogStore.read().ifEmpty { "היומן ריק" }
+        tv.textSize = 12f
+        tv.setPadding(dp(16), dp(8), dp(16), dp(8))
+        tv.setTextIsSelectable(true)
+        val sv = ScrollView(this)
+        sv.addView(tv)
+        AlertDialog.Builder(this)
+            .setTitle("יומן פעילות (החדש למעלה)")
+            .setView(sv)
+            .setPositiveButton("סגור", null)
+            .setNeutralButton("נקה") { _, _ -> LogStore.clear() }
+            .show()
     }
 
     private fun updateStatus() {

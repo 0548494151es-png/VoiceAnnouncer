@@ -19,6 +19,11 @@ class KeepAliveService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onDestroy() {
+        LogStore.add("שירות הרקע נעצר על ידי המערכת")
+        super.onDestroy()
+    }
+
     override fun onCreate() {
         super.onCreate()
         Speaker.init(this)
@@ -27,6 +32,7 @@ class KeepAliveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             goForeground()
+            LogStore.add("שירות הרקע פעיל")
         } catch (e: Exception) {
             stopSelf()
             return START_NOT_STICKY

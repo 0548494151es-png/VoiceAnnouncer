@@ -47,6 +47,7 @@ object Speaker {
                         override fun onError(utteranceId: String?) { abandonFocus() }
                     })
                     ready = true
+                    LogStore.add("מנוע הקול מוכן")
                     for (text in pending) speakNow(text)
                     pending.clear()
                 }
@@ -57,6 +58,20 @@ object Speaker {
     /** מקריא אם ההגדרות מאפשרות (מופעל, שעות שקט, בלוטוס בלבד) */
     @Synchronized
     fun announce(context: Context, text: String, ignoreQuiet: Boolean = false): Result {
+        val r = announceInner(context, text, ignoreQuiet)
+        val what = when (r) {
+            Result.SPOKEN -> "הוקרא"
+            Result.DISABLED -> "לא הוקרא: הקראה כבויה"
+            Result.QUIET_HOURS -> "לא הוקרא: שעות שקט"
+            Result.NO_BLUETOOTH -> "לא הוקרא: אין בלוטוס מחובר"
+            Result.SILENT_MODE -> "לא הוקרא: הטלפון בשקט או ברטט"
+        }
+        LogStore.add(what + " (" + text.substringBefore(' ') + ")")
+        return r
+    }
+
+    @Synchronized
+    private fun announceInner(context: Context, text: String, ignoreQuiet: Boolean): Result {
         val prefs = Prefs(context)
         if (!prefs.enabled) return Result.DISABLED
         if (prefs.respectSilent && isPhoneSilent(context)) return Result.SILENT_MODE
