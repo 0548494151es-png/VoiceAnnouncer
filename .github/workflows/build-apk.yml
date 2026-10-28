@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# נדרש כדי שהתהליך יוכל לפרסם Release עם קובץ ה-APK
 permissions:
   contents: write
 
@@ -35,6 +36,7 @@ jobs:
           name: VoiceAnnouncer-apk
           path: VoiceAnnouncer.apk
 
+      # זה מה שמאפשר עדכון מתוך האפליקציה: כל בנייה מפורסמת כ-Release עם מספר גרסה עולה
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
