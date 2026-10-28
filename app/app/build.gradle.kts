@@ -4,7 +4,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// מספר הגרסה מגיע מ-GitHub Actions (-Pvc=מספר הריצה), כך שכל בנייה חדשה גבוהה מהקודמת
 val vc: Int = (project.findProperty("vc") as String?)?.toIntOrNull() ?: 1
 
 android {
@@ -19,7 +18,6 @@ android {
         versionName = "1.$vc"
     }
 
-    // חתימה קבועה - חובה כדי שעדכון מתוך האפליקציה יצליח להתקין מעל הגרסה הקודמת
     signingConfigs {
         create("release") {
             storeFile = file("release.jks")
