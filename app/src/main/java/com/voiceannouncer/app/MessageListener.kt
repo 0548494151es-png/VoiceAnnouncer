@@ -4,7 +4,7 @@ import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 
-/** קורא הודעות נכנסות (וואטסאפ / SMS / טלגרם) מתוך ההתראות. עובד גם כשהאפליקציה סגורה. */
+/** קורא הודעות נכנסות (וואטסאפ / SMS) מתוך ההתראות. עובד גם כשהאפליקציה סגורה. */
 class MessageListener : NotificationListenerService() {
 
     private var lastKey = ""
@@ -40,17 +40,16 @@ class MessageListener : NotificationListenerService() {
 
         if (!Speaker.allowed(this)) return
 
-        val text = if (prefs.readBody && body.isNotEmpty()) {
-            "הודעה מ$title. ${body.take(250)}"
-        } else {
-            "הודעה מ$title"
-        }
+        val text = fillTemplate(
+            prefs.tplMessage,
+            name = title,
+            text = if (prefs.readBody) body.take(250) else ""
+        )
         Speaker.speak(this, text)
     }
 
     private fun enabledFor(pkg: String, p: Prefs): Boolean = when (pkg) {
         "com.whatsapp", "com.whatsapp.w4b" -> p.whatsapp
-        "org.telegram.messenger", "org.telegram.messenger.web" -> p.telegram
         "com.google.android.apps.messaging",
         "com.android.mms",
         "com.android.messaging",

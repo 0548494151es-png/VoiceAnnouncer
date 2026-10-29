@@ -30,7 +30,7 @@ class CallReceiver : BroadcastReceiver() {
                     handler.postDelayed({
                         if (ringing && !announced && Speaker.allowed(app)) {
                             announced = true
-                            Speaker.startRinging(app, "שיחה ממספר חסוי")
+                            Speaker.startRinging(app, fillTemplate(prefs.tplPrivate))
                         }
                     }, 2500)
                     return
@@ -40,10 +40,11 @@ class CallReceiver : BroadcastReceiver() {
                 lastNumber = number
                 if (!Speaker.allowed(app)) return
                 val name = nameFor(app, number)
+                val spaced = number.filter { it.isDigit() }.toCharArray().joinToString(" ")
                 val text = if (name != null) {
-                    "שיחה מ$name"
+                    fillTemplate(prefs.tplKnown, name = name, number = spaced)
                 } else {
-                    "שיחה ממספר " + number.filter { it.isDigit() }.toCharArray().joinToString(" ")
+                    fillTemplate(prefs.tplUnknown, number = spaced)
                 }
                 Speaker.startRinging(app, text)
             }

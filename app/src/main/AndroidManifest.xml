@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- נדרש כדי להשתיק את הצלצול לרגע בזמן ההכרזה (המשתמש מאשר ב"גישה ל'נא לא להפריע'") -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
     <queries>
         <intent>
@@ -45,7 +47,7 @@
                 android:value="announce_calls_and_messages_aloud" />
         </service>
 
-        <!-- קורא הודעות נכנסות מתוך ההתראות (וואטסאפ, SMS, טלגרם) -->
+        <!-- קורא הודעות נכנסות מתוך ההתראות (וואטסאפ, SMS) -->
         <service
             android:name=".MessageListener"
             android:exported="true"
