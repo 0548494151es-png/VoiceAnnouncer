@@ -49,6 +49,16 @@ class Prefs(ctx: Context) {
         get() = b("muteRing", true)
         set(v) = putB("muteRing", v)
 
+    /** כשמחובר בלוטוס: להכריז על המתקשר גם ברמקול של הטלפון (בנוסף לאוזניה/רמקול הבלוטוס) */
+    var btAlsoSpeaker: Boolean
+        get() = b("btAlsoSpeaker", false)
+        set(v) = putB("btAlsoSpeaker", v)
+
+    /** אבחון: מה זוהה בהודעה האחרונה (שולח, תוכן, ומאיפה נלקח התוכן) */
+    var lastMsgDebug: String
+        get() = s("lastMsgDebug", "")
+        set(v) = putS("lastMsgDebug", v)
+
     /** נוסח ההכרזה: מתקשר שמור באנשי קשר. משתנים: {name} {number} */
     var tplKnown: String
         get() = s("tplKnown", DEF_KNOWN)
@@ -97,11 +107,6 @@ class Prefs(ctx: Context) {
     var btOnly: Boolean
         get() = b("btOnly", false)
         set(v) = putB("btOnly", v)
-
-    /** לא להקריא כשהטלפון על שקט / רטט */
-    var skipSilent: Boolean
-        get() = b("skipSilent", true)
-        set(v) = putB("skipSilent", v)
 
     /** גובה קול: נמוך = יותר גברי */
     var pitch: Float

@@ -125,6 +125,7 @@ private fun Screen(tick: Int) {
     var gapSec by remember { mutableIntStateOf(prefs.repeatGapSec) }
     var callRate by remember { mutableStateOf(prefs.callRate) }
     var muteRing by remember { mutableStateOf(prefs.muteRing) }
+    var btAlsoSpeaker by remember { mutableStateOf(prefs.btAlsoSpeaker) }
     var tplKnown by remember { mutableStateOf(prefs.tplKnown) }
     var tplUnknown by remember { mutableStateOf(prefs.tplUnknown) }
     var tplPrivate by remember { mutableStateOf(prefs.tplPrivate) }
@@ -133,7 +134,6 @@ private fun Screen(tick: Int) {
     var sms by remember { mutableStateOf(prefs.sms) }
     var readBody by remember { mutableStateOf(prefs.readBody) }
     var btOnly by remember { mutableStateOf(prefs.btOnly) }
-    var skipSilent by remember { mutableStateOf(prefs.skipSilent) }
     var pitch by remember { mutableStateOf(prefs.pitch) }
     var rate by remember { mutableStateOf(prefs.rate) }
     var voice by remember { mutableStateOf(prefs.voice) }
@@ -274,6 +274,12 @@ private fun Screen(tick: Int) {
                     supportingText = { Text("{name} = שם השולח, {text} = תוכן ההודעה") },
                     modifier = Modifier.fillMaxWidth()
                 )
+                val lastMsg = remember(tick, permTick) { prefs.lastMsgDebug }
+                if (lastMsg.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("ההודעה האחרונה שזוהתה:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(lastMsg, fontSize = 12.sp)
+                }
             }
 
             // ---- הכרזת שיחות ----
@@ -283,6 +289,11 @@ private fun Screen(tick: Int) {
                     "הצלצול נחתך רק בזמן שהשם מוקרא, ואחרי זה ממשיך",
                     muteRing, Teal
                 ) { muteRing = it; prefs.muteRing = it }
+                ToggleRow(
+                    "בלוטוס: להכריז גם ברמקול של הטלפון",
+                    "כשמחובר בלוטוס, שם המתקשר יישמע גם בבלוטוס וגם ברמקול הטלפון",
+                    btAlsoSpeaker, Blue
+                ) { btAlsoSpeaker = it; prefs.btAlsoSpeaker = it }
 
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -357,7 +368,8 @@ private fun Screen(tick: Int) {
                         Speaker.startRinging(
                             ctx,
                             fillTemplate(prefs.tplKnown, name = "דוד כהן", number = "0 5 0 1 2 3 4 5 6 7"),
-                            allowMute = false
+                            allowMute = false,
+                            force = true
                         )
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Teal),
@@ -372,7 +384,11 @@ private fun Screen(tick: Int) {
             // ---- תנאים ----
             SectionCard("מתי להקריא", "🎧", Blue) {
                 ToggleRow("רק כשמחובר בלוטוס", "אוזניות / רכב / רמקול", btOnly, Blue) { btOnly = it; prefs.btOnly = it }
-                ToggleRow("לא להקריא בשקט / רטט", null, skipSilent, Blue) { skipSilent = it; prefs.skipSilent = it }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "🔕 כשהטלפון על שקט או רטט, שום דבר לא מוקרא: לא שם מתקשר, לא הודעות ולא שם שולח. זה קבוע ואי אפשר לכבות.",
+                    fontSize = 13.sp
+                )
             }
 
             // ---- קול ----
