@@ -42,11 +42,13 @@ class MessageListener : NotificationListenerService() {
 
         if (!Speaker.allowed(this)) return
 
-        val text = fillTemplate(
-            prefs.tplMessage,
-            name = title,
-            text = if (prefs.readBody) body.take(250) else ""
-        )
+        val bodyOut = if (prefs.readBody) body.take(250) else ""
+        val tpl = prefs.tplMessage
+        val text = if (bodyOut.isNotEmpty() && !tpl.contains("{text}")) {
+            fillTemplate("$tpl. {text}", name = title, text = bodyOut)
+        } else {
+            fillTemplate(tpl, name = title, text = bodyOut)
+        }
         Speaker.speak(this, text)
     }
 
