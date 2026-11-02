@@ -1,6 +1,7 @@
 package com.voiceannouncer.app
 
 import android.app.Notification
+import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
@@ -59,6 +60,14 @@ class MessageListener : NotificationListenerService() {
      */
     private fun extractBody(n: Notification): Pair<String, String> {
         val ex = n.extras
+        // הודעות בסגנון שיחה (וואטסאפ, Google Messages): קוראים ישירות את רשימת ההודעות
+        try {
+            val arr = ex?.getParcelableArray(Notification.EXTRA_MESSAGES)
+            val lastBundle = arr?.lastOrNull() as? Bundle
+            val t = lastBundle?.getCharSequence("text")?.toString()?.trim().orEmpty()
+            if (t.isNotEmpty()) return t to "רשימת הודעות"
+        } catch (_: Exception) {
+        }
         try {
             val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)
             val last = style?.messages?.lastOrNull()?.text?.toString()?.trim().orEmpty()
@@ -74,6 +83,8 @@ class MessageListener : NotificationListenerService() {
         if (lastLine.isNotEmpty()) return lastLine to "שורות"
         val sub = ex?.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.trim().orEmpty()
         if (sub.isNotEmpty()) return sub to "תת-טקסט"
+        val ticker = n.tickerText?.toString()?.trim().orEmpty()
+        if (ticker.isNotEmpty()) return ticker to "טיקר"
         return "" to "אין"
     }
 
@@ -83,6 +94,7 @@ class MessageListener : NotificationListenerService() {
         "com.android.mms",
         "com.android.messaging",
         "com.samsung.android.messaging" -> p.sms
-        else -> false
+        // אפליקציות הודעות של יצרנים אחרים (שיומי, OPPO ועוד)
+        else -> pkg.endsWith(".mms") && p.sms
     }
 }

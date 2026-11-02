@@ -54,6 +54,11 @@ class Prefs(ctx: Context) {
         get() = b("btAlsoSpeaker", false)
         set(v) = putB("btAlsoSpeaker", v)
 
+    /** עוצמת הצלצול המקורית בזמן שהצלצול מונמך להכרזה (0 = אין הנמכה פעילה). נשמר כדי לשחזר גם אם התהליך נהרג באמצע. */
+    var ringBackup: Int
+        get() = sp.getInt("ringBackup", 0)
+        set(v) = sp.edit().putInt("ringBackup", v).apply()
+
     /** אבחון: מה זוהה בהודעה האחרונה (שולח, תוכן, ומאיפה נלקח התוכן) */
     var lastMsgDebug: String
         get() = s("lastMsgDebug", "")

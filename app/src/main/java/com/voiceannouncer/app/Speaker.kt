@@ -47,6 +47,7 @@ object Speaker {
         if (tts != null) return
         val a = ctx.applicationContext
         app = a
+        recoverRing(a)
         tts = TextToSpeech(a) { status ->
             main.post {
                 val t = tts
@@ -232,15 +233,24 @@ object Speaker {
         false
     }
 
+    /**
+     * הנמכת הצלצול בזמן ההכרזה. לא מורידים ל-0: בהרבה מכשירים ירידה ל-0 הופכת את הטלפון
+     * למצב רטט, הצלצול נעלם ולא תמיד חוזר, ואז האפליקציה חושבת שהטלפון על שקט ומפסיקה להקריא.
+     * לכן מנמיכים למינימום (1) ומחזירים את העוצמה המקורית מיד אחרי ההכרזה.
+     * העוצמה המקורית נשמרת בהגדרות, כדי שגם אם התהליך נהרג באמצע אפשר יהיה לשחזר.
+     */
     private fun muteRing(ctx: Context) {
-        if (muted || !canMuteRing(ctx)) return
+        if (muted) return
         try {
             val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             if (am.ringerMode != AudioManager.RINGER_MODE_NORMAL) return
+            val vol = am.getStreamVolume(AudioManager.STREAM_RING)
+            if (vol <= 1) return
             savedMode = am.ringerMode
-            savedVol = am.getStreamVolume(AudioManager.STREAM_RING)
+            savedVol = vol
+            Prefs(ctx).ringBackup = vol
             muted = true
-            am.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+            am.setStreamVolume(AudioManager.STREAM_RING, 1, 0)
             // רשת ביטחון: אם משהו משתבש, הצלצול חוזר לבד אחרי 20 שניות
             main.removeCallbacks(safetyUnmute)
             main.postDelayed(safetyUnmute, 20_000)
@@ -253,10 +263,50 @@ object Speaker {
         if (!muted) return
         muted = false
         main.removeCallbacks(safetyUnmute)
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val mode = savedMode
+        val vol = savedVol
+        restoreRing(am, mode, vol)
+        // לפעמים המערכת מתעלמת מהשחזור הראשון - בודקים ומנסים שוב
+        main.postDelayed({
+            try {
+                if (!muted && vol > 0 && am.getStreamVolume(AudioManager.STREAM_RING) != vol &&
+                    Prefs(ctx).ringBackup > 0
+                ) {
+                    restoreRing(am, mode, vol)
+                }
+            } catch (_: Exception) {
+            }
+            if (!muted) Prefs(ctx).ringBackup = 0
+        }, 300)
+    }
+
+    private fun restoreRing(am: AudioManager, mode: Int, vol: Int) {
         try {
+            if (am.ringerMode != mode) am.ringerMode = mode
+        } catch (_: Exception) {
+        }
+        try {
+            if (vol > 0) am.setStreamVolume(AudioManager.STREAM_RING, vol, 0)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * אם התהליך נהרג כשהצלצול היה מונמך, העוצמה נשארת על המינימום והאפליקציה חושבת שהטלפון שקט.
+     * כאן משחזרים את העוצמה המקורית, אבל רק אם העוצמה עדיין נמוכה (כלומר המשתמש לא שינה אותה בינתיים).
+     */
+    fun recoverRing(ctx: Context) {
+        if (muted) return
+        try {
+            val p = Prefs(ctx)
+            val backup = p.ringBackup
+            if (backup <= 0) return
             val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            if (am.ringerMode != savedMode) am.ringerMode = savedMode
-            if (savedVol > 0) am.setStreamVolume(AudioManager.STREAM_RING, savedVol, 0)
+            val stuck = am.ringerMode != AudioManager.RINGER_MODE_NORMAL ||
+                am.getStreamVolume(AudioManager.STREAM_RING) <= 1
+            if (stuck) restoreRing(am, AudioManager.RINGER_MODE_NORMAL, backup)
+            p.ringBackup = 0
         } catch (_: Exception) {
         }
     }
@@ -265,6 +315,7 @@ object Speaker {
     fun allowed(ctx: Context): Boolean {
         val p = Prefs(ctx)
         if (!p.enabled) return false
+        recoverRing(ctx)
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (!muted && isSilent(am)) return false
         if (p.btOnly && !bluetoothConnected(am)) return false
