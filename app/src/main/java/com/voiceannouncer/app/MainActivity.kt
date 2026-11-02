@@ -126,6 +126,9 @@ private fun Screen(tick: Int) {
     var callRate by remember { mutableStateOf(prefs.callRate) }
     var muteRing by remember { mutableStateOf(prefs.muteRing) }
     var btAlsoSpeaker by remember { mutableStateOf(prefs.btAlsoSpeaker) }
+    var btVoiceRoute by remember { mutableStateOf(prefs.btVoiceRoute) }
+    var readApps by remember { mutableStateOf(prefs.readApps) }
+    var diagTick by remember { mutableIntStateOf(0) }
     var tplKnown by remember { mutableStateOf(prefs.tplKnown) }
     var tplUnknown by remember { mutableStateOf(prefs.tplUnknown) }
     var tplPrivate by remember { mutableStateOf(prefs.tplPrivate) }
@@ -147,6 +150,7 @@ private fun Screen(tick: Int) {
             add(Manifest.permission.READ_CALL_LOG)
             add(Manifest.permission.READ_CONTACTS)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+            if (Build.VERSION.SDK_INT >= 31) add(Manifest.permission.BLUETOOTH_CONNECT)
         }.toTypedArray()
     }
     var permTick by remember { mutableIntStateOf(0) }
@@ -282,6 +286,32 @@ private fun Screen(tick: Int) {
                 }
             }
 
+            // ---- אפליקציות נוספות (תזכורות וכו') ----
+            SectionCard("אפליקציות נוספות", "🔔", Blue) {
+                Text(
+                    "ברירת המחדל: שום אפליקציה נוספת לא מוקראת. הדלק רק את מה שאתה רוצה, למשל תזכורות או יומן.",
+                    fontSize = 13.sp
+                )
+                val seen = remember(tick, permTick, diagTick) {
+                    prefs.seenApps().filter { builtInKind(it.first) == null }
+                }
+                if (seen.isEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "עדיין לא זוהתה התראה מאפליקציה אחרת. תן לתזכורת להופיע בטלפון, ואז חזור לכאן ולחץ רענן.",
+                        fontSize = 12.sp, color = Color.Gray
+                    )
+                }
+                seen.forEach { (pkg, label) ->
+                    ToggleRow(label, pkg, readApps.contains(pkg), Blue) { on ->
+                        val next = if (on) readApps + pkg else readApps - pkg
+                        readApps = next
+                        prefs.readApps = next
+                    }
+                }
+                TextButton(onClick = { diagTick++ }) { Text("↻ רענן את הרשימה") }
+            }
+
             // ---- הכרזת שיחות ----
             SectionCard("הכרזת שיחות", "📞", Teal) {
                 ToggleRow(
@@ -294,6 +324,11 @@ private fun Screen(tick: Int) {
                     "כשמחובר בלוטוס, שם המתקשר יישמע גם בבלוטוס וגם ברמקול הטלפון",
                     btAlsoSpeaker, Blue
                 ) { btAlsoSpeaker = it; prefs.btAlsoSpeaker = it }
+                ToggleRow(
+                    "בלוטוס: להכריז דרך ערוץ השיחה של האוזנייה",
+                    "אם בזמן צלצול לא שומעים את שם המתקשר באוזנייה / ברכב, נסה להדליק",
+                    btVoiceRoute, Blue
+                ) { btVoiceRoute = it; prefs.btVoiceRoute = it }
 
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -439,6 +474,30 @@ private fun Screen(tick: Int) {
                     colors = ButtonDefaults.buttonColors(containerColor = Pink),
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("▶ נסה את הקול") }
+            }
+
+            // ---- יומן אבחון ----
+            SectionCard("יומן אבחון", "🩺", Orange) {
+                Text(
+                    "מה קרה בכל הקראה ולמה משהו לא הוקרא. אם משהו לא עובד, לחץ 'שתף' ושלח לי.",
+                    fontSize = 13.sp
+                )
+                val logText = remember(tick, permTick, diagTick) { DiagLog.text(ctx) }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (logText.isBlank()) "(היומן ריק)" else logText.split("\n").takeLast(15).joinToString("\n"),
+                    fontSize = 11.sp
+                )
+                Row(Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { diagTick++ }) { Text("↻ רענן") }
+                    TextButton(onClick = {
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType("text/plain")
+                            .putExtra(Intent.EXTRA_TEXT, DiagLog.text(ctx))
+                        ctx.startActivity(Intent.createChooser(send, "שתף יומן").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }) { Text("📤 שתף") }
+                    TextButton(onClick = { DiagLog.clear(ctx); diagTick++ }) { Text("🗑 נקה") }
+                }
             }
 
             // ---- עדכון ----

@@ -13,6 +13,11 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- נדרש כדי להשתיק את הצלצול לרגע בזמן ההכרזה (המשתמש מאשר ב"גישה ל'נא לא להפריע'") -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <!-- רשימת האפליקציות שהתריעו (לבחירת מה להקריא) -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- הכרזה דרך ערוץ השיחה של אוזניית בלוטוס -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <queries>
         <intent>

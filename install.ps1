@@ -65,7 +65,7 @@ foreach ($f in $files) {
 
 $tree = Gh 'POST' '/git/trees' @{ base_tree = $baseTree; tree = $entries }
 $commit = Gh 'POST' '/git/commits' @{
-    message = 'Fix: ring volume restore + SMS reading on Xiaomi/Oppo'
+    message = 'Fix ring + SMS, choose extra apps, Bluetooth option, diagnostics log'
     tree    = $tree.sha
     parents = @($baseCommit)
 }

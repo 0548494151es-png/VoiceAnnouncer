@@ -60,12 +60,16 @@ object Speaker {
                             .build()
                     )
                     t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(utteranceId: String?) {}
+                        override fun onStart(utteranceId: String?) {
+                            d("ההקראה התחילה להישמע ($utteranceId)")
+                        }
                         override fun onDone(utteranceId: String?) {
+                            d("ההקראה הסתיימה ($utteranceId)")
                             main.post { callbacks.remove(utteranceId)?.invoke() }
                         }
                         @Deprecated("Deprecated in Java")
                         override fun onError(utteranceId: String?) {
+                            d("⚠ שגיאת הקראה ($utteranceId)")
                             main.post { callbacks.remove(utteranceId)?.invoke() }
                         }
                         override fun onStop(utteranceId: String?, interrupted: Boolean) {
@@ -122,11 +126,90 @@ object Speaker {
             }
         }
         val id = "u${counter++}"
-        callbacks[id] = onDone
-        val r = t.speak(text, TextToSpeech.QUEUE_ADD, null, id)
-        if (r != TextToSpeech.SUCCESS) {
-            callbacks.remove(id)
-            onDone?.invoke()
+        val am2 = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        // בלוטוס: בזמן צלצול האוזנייה עוברת למצב שיחה והמדיה לפעמים מושתקת. אם ההגדרה דולקת,
+        // מכריזים דרך ערוץ השיחה של האוזנייה.
+        val useSco = ring && p.btVoiceRoute && bluetoothConnected(am2)
+        try {
+            t.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(
+                        if (useSco) AudioAttributes.USAGE_VOICE_COMMUNICATION
+                        else AudioAttributes.USAGE_MEDIA
+                    )
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+        } catch (_: Exception) {
+        }
+        val done: (() -> Unit)? = if (useSco) ({ stopSco(am2); onDone?.invoke() }) else onDone
+        callbacks[id] = done
+        val session = ringSession
+        val go = Runnable {
+            if (ring && session != ringSession) {
+                callbacks.remove(id)
+                return@Runnable
+            }
+            val r = t.speak(text, TextToSpeech.QUEUE_ADD, null, id)
+            d(
+                "הקראה (\"${text.take(40)}\"): " + (if (r == TextToSpeech.SUCCESS) "נשלחה" else "נכשלה") +
+                    " | בלוטוס=${bluetoothConnected(am2)} ערוץ=${if (useSco) "שיחה" else "מדיה"}"
+            )
+            if (r != TextToSpeech.SUCCESS) {
+                callbacks.remove(id)
+                done?.invoke()
+            }
+        }
+        if (useSco) {
+            startSco(am2)
+            main.postDelayed(go, 1000)
+        } else {
+            go.run()
+        }
+    }
+
+    // ---- ערוץ שיחה בבלוטוס ----
+    private var scoOn = false
+
+    private fun startSco(am: AudioManager) {
+        try {
+            if (!scoOn) {
+                am.startBluetoothSco()
+                am.isBluetoothScoOn = true
+                scoOn = true
+                d("ערוץ שיחה בבלוטוס הופעל")
+            }
+        } catch (e: Exception) {
+            d("⚠ שגיאה בהפעלת ערוץ שיחה בבלוטוס: ${e.message}")
+        }
+    }
+
+    private fun stopSco(am: AudioManager) {
+        if (!scoOn) return
+        scoOn = false
+        try {
+            // אם השיחה כבר נענתה, לא נוגעים בערוץ - הוא שייך לשיחה
+            if (am.mode == AudioManager.MODE_IN_CALL || am.mode == AudioManager.MODE_IN_COMMUNICATION) return
+            am.isBluetoothScoOn = false
+            am.stopBluetoothSco()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun d(msg: String) {
+        app?.let { DiagLog.log(it, msg) }
+    }
+
+    /** למה לא מקריאים כרגע (null = מותר) */
+    fun denyReason(ctx: Context): String? {
+        val p = Prefs(ctx)
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        return when {
+            !p.enabled -> "האפליקציה כבויה"
+            !muted && am.ringerMode != AudioManager.RINGER_MODE_NORMAL -> "הטלפון על שקט/רטט"
+            !muted && am.getStreamVolume(AudioManager.STREAM_RING) == 0 -> "עוצמת צלצול 0"
+            p.btOnly && !bluetoothConnected(am) -> "מוגדר 'רק בבלוטוס' ואין בלוטוס"
+            else -> null
         }
     }
 
@@ -187,8 +270,10 @@ object Speaker {
     fun startRinging(ctx: Context, text: String, allowMute: Boolean = true, force: Boolean = false) {
         stopRinging()
         val a = ctx.applicationContext
+        app = a
         val p = Prefs(a)
         val session = ++ringSession
+        d("התחלת הכרזה: \"$text\" | חזרות=${if (p.repeatForever) "∞" else p.repeatCount.toString()} השתקה=${p.muteRing}")
         val total = if (p.repeatForever) Int.MAX_VALUE else p.repeatCount
         val gapMs = p.repeatGapSec * 1000L
         val rate = p.callRate
@@ -222,7 +307,10 @@ object Speaker {
             tts?.stop()
         } catch (_: Exception) {
         }
-        app?.let { unmuteRing(it) }
+        app?.let {
+            unmuteRing(it)
+            stopSco(it.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+        }
     }
 
     /** האם יש הרשאת "נא לא להפריע" - נדרשת כדי להשתיק את הצלצול */

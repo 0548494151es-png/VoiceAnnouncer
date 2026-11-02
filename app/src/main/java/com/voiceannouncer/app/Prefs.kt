@@ -59,6 +59,36 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("ringBackup", 0)
         set(v) = sp.edit().putInt("ringBackup", v).apply()
 
+    /** אפליקציות נוספות (תזכורות וכו') שהמשתמש אישר להקריא. ברירת מחדל: אף אחת. */
+    var readApps: Set<String>
+        get() = sp.getStringSet("readApps", emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit().putStringSet("readApps", HashSet(v)).apply()
+
+    /** אפליקציות שהתריעו לאחרונה, כדי שאפשר יהיה לבחור מהן. כל שורה: חבילה, טאב, שם. */
+    var seenAppsRaw: String
+        get() = s("seenApps", "")
+        set(v) = putS("seenApps", v)
+
+    fun seenApps(): List<Pair<String, String>> =
+        seenAppsRaw.split("\n").filter { it.contains("\t") }.map {
+            val i = it.indexOf('\t')
+            it.substring(0, i) to it.substring(i + 1)
+        }
+
+    /** רושם אפליקציה שהתריעה. מחזיר true אם היא חדשה. */
+    fun noteSeen(pkg: String, label: String): Boolean {
+        val cur = seenApps()
+        if (cur.any { it.first == pkg }) return false
+        val next = (listOf(pkg to label) + cur).take(40)
+        seenAppsRaw = next.joinToString("\n") { it.first + "\t" + it.second }
+        return true
+    }
+
+    /** בלוטוס: להכריז שיחה דרך ערוץ השיחה של האוזנייה (אם ההכרזה לא נשמעת בבלוטוס) */
+    var btVoiceRoute: Boolean
+        get() = b("btVoiceRoute", false)
+        set(v) = putB("btVoiceRoute", v)
+
     /** אבחון: מה זוהה בהודעה האחרונה (שולח, תוכן, ומאיפה נלקח התוכן) */
     var lastMsgDebug: String
         get() = s("lastMsgDebug", "")
