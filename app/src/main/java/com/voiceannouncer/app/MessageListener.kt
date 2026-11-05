@@ -72,21 +72,10 @@ class MessageListener : NotificationListenerService() {
         if (!enabled) return
 
         val extras = n.extras ?: return
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
         val (body, source) = extractBody(n)
-
-        // בהתראות MessagingStyle הכותרת עלולה להיות שם הקבוצה ולא שם השולח.
-        // מעדיפים את האדם ששלח את ההודעה האחרונה, ורק אחר כך את כותרת ההתראה.
-        val senderFromMessage = extractLastSender(n)
-        val title = senderFromMessage.ifBlank {
-            extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
-        }.ifBlank {
-            extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()?.trim().orEmpty()
-        }
-        if (title.isEmpty() && body.isEmpty()) {
-            DiagLog.log(this, "התראה מ-${label.ifEmpty { pkg }} ללא שולח ותוכן שניתן לחלץ")
-            return
-        }
-        prefs.lastMsgDebug = "שולח: ${title.ifEmpty { "(לא זוהה)" }}\\nתוכן: ${body.ifEmpty { "(לא נמצא)" }.take(100)}\\nמקור התוכן: $source"
+        if (title.isEmpty() && body.isEmpty()) return
+        prefs.lastMsgDebug = "שולח: $title\nתוכן: ${body.ifEmpty { "(לא נמצא)" }.take(60)}\nמקור התוכן: $source"
 
         // מניעת הקראה כפולה של אותה הודעה
         val key = "$pkg|$title|$body"
@@ -131,35 +120,9 @@ class MessageListener : NotificationListenerService() {
      * בשדה הרגיל, אז בודקים כמה מקומות לפי סדר: ההודעה האחרונה בשיחה, הטקסט הרגיל,
      * טקסט מורחב, ושורות הרשימה.
      */
-    private fun extractLastSender(n: Notification): String {
-        val extras = n.extras
-        try {
-            val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)
-            val sender = style?.messages?.lastOrNull()?.person?.name?.toString()?.trim().orEmpty()
-            if (sender.isNotEmpty()) return sender
-        } catch (_: Exception) {
-        }
-
-        try {
-            val arr = extras?.getParcelableArray(Notification.EXTRA_MESSAGES)
-            val last = arr?.lastOrNull() as? Bundle
-            val sender = last?.getCharSequence("sender")?.toString()?.trim()
-                .orEmpty().ifBlank { last?.getCharSequence("sender_name")?.toString()?.trim().orEmpty() }
-            if (sender.isNotEmpty()) return sender
-        } catch (_: Exception) {
-        }
-        return ""
-    }
-
-    /** מחלץ את ההודעה האחרונה לפני טקסטי סיכום כמו "3 הודעות חדשות". */
     private fun extractBody(n: Notification): Pair<String, String> {
         val ex = n.extras
-        try {
-            val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)
-            val last = style?.messages?.lastOrNull()?.text?.toString()?.trim().orEmpty()
-            if (last.isNotEmpty()) return last to "הודעה אחרונה בשיחה"
-        } catch (_: Exception) {
-        }
+        // הודעות בסגנון שיחה (וואטסאפ, Google Messages): קוראים ישירות את רשימת ההודעות
         try {
             val arr = ex?.getParcelableArray(Notification.EXTRA_MESSAGES)
             val lastBundle = arr?.lastOrNull() as? Bundle
@@ -167,10 +130,16 @@ class MessageListener : NotificationListenerService() {
             if (t.isNotEmpty()) return t to "רשימת הודעות"
         } catch (_: Exception) {
         }
-        val big = ex?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
-        if (big.isNotEmpty()) return big to "טקסט מורחב"
+        try {
+            val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)
+            val last = style?.messages?.lastOrNull()?.text?.toString()?.trim().orEmpty()
+            if (last.isNotEmpty()) return last to "הודעה אחרונה בשיחה"
+        } catch (_: Exception) {
+        }
         val text = ex?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
         if (text.isNotEmpty()) return text to "טקסט רגיל"
+        val big = ex?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
+        if (big.isNotEmpty()) return big to "טקסט מורחב"
         val lines = ex?.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
         val lastLine = lines?.lastOrNull()?.toString()?.trim().orEmpty()
         if (lastLine.isNotEmpty()) return lastLine to "שורות"

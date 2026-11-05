@@ -108,6 +108,16 @@ object Speaker {
         t.setPitch(p.pitch)
         t.setSpeechRate(rate ?: p.rate)
         applyVoice(t, p.voice)
+        val am2 = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val btOn = bluetoothConnected(am2)
+        // בלוטוס + שקט/רטט: מקריאים רק באוזנייה, ובשום אופן לא ברמקול הטלפון
+        val earOnly = btOn && !muted && isSilent(am2)
+        // בלוטוס: ההקראה נוצרת לקובץ ומנוגנת ישירות על האוזנייה (ולא על הרמקול)
+        val useEar = btOn && ((ring && p.btVoiceRoute) || earOnly)
+        if (useEar) {
+            speakToEar(ctx, t, text, ring, onDone)
+            return
+        }
         // בלוטוס מחובר + הוגדר "גם ברמקול": מכינים עותק של ההכרזה שיושמע ברמקול הטלפון
         if (ring && p.btAlsoSpeaker) {
             try {
@@ -126,45 +136,144 @@ object Speaker {
             }
         }
         val id = "u${counter++}"
-        val am2 = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        // בלוטוס: בזמן צלצול האוזנייה עוברת למצב שיחה והמדיה לפעמים מושתקת. אם ההגדרה דולקת,
-        // מכריזים דרך ערוץ השיחה של האוזנייה.
-        val useSco = ring && p.btVoiceRoute && bluetoothConnected(am2)
         try {
             t.setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(
-                        if (useSco) AudioAttributes.USAGE_VOICE_COMMUNICATION
-                        else AudioAttributes.USAGE_MEDIA
-                    )
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
         } catch (_: Exception) {
         }
-        val done: (() -> Unit)? = if (useSco) ({ stopSco(am2); onDone?.invoke() }) else onDone
-        callbacks[id] = done
+        callbacks[id] = onDone
+        val r = t.speak(text, TextToSpeech.QUEUE_ADD, null, id)
+        d("הקראה (\"${text.take(40)}\"): " + (if (r == TextToSpeech.SUCCESS) "נשלחה" else "נכשלה") + " | בלוטוס=$btOn")
+        if (r != TextToSpeech.SUCCESS) {
+            callbacks.remove(id)
+            onDone?.invoke()
+        }
+    }
+
+    // ---- הקראה לאוזנייה בלבד ----
+    private var earPlayer: MediaPlayer? = null
+
+    private fun findOut(am: AudioManager, sco: Boolean): AudioDeviceInfo? = try {
+        am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull {
+            if (sco) it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            else it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * יוצר קובץ הקראה ומנגן אותו ישירות על אוזניית הבלוטוס.
+     * אם האוזנייה לא זמינה - לא מקריאים בכלל (כדי שלא יישמע ברמקול).
+     */
+    private fun speakToEar(ctx: Context, t: TextToSpeech, text: String, ring: Boolean, onDone: (() -> Unit)?) {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val session = ringSession
-        val go = Runnable {
-            if (ring && session != ringSession) {
-                callbacks.remove(id)
-                return@Runnable
+        val file = File(ctx.cacheDir, "ear_${counter}.wav")
+        val fid = "e${counter++}"
+        var finished = false
+        fun finish() {
+            if (finished) return
+            finished = true
+            try {
+                file.delete()
+            } catch (_: Exception) {
             }
-            val r = t.speak(text, TextToSpeech.QUEUE_ADD, null, id)
-            d(
-                "הקראה (\"${text.take(40)}\"): " + (if (r == TextToSpeech.SUCCESS) "נשלחה" else "נכשלה") +
-                    " | בלוטוס=${bluetoothConnected(am2)} ערוץ=${if (useSco) "שיחה" else "מדיה"}"
-            )
-            if (r != TextToSpeech.SUCCESS) {
-                callbacks.remove(id)
-                done?.invoke()
+            stopSco(am)
+            onDone?.invoke()
+        }
+        callbacks[fid] = {
+            if (ring && session != ringSession) {
+                finish()
+            } else if (!file.exists() || file.length() < 100) {
+                d("⚠ לא נוצר קובץ הקראה לאוזנייה")
+                finish()
+            } else {
+                routeToEar(ctx, am, file, ring, session) { finish() }
             }
         }
-        if (useSco) {
-            startSco(am2)
-            main.postDelayed(go, 1000)
-        } else {
-            go.run()
+        d("הקראה לאוזנייה בלבד: \"${text.take(40)}\"")
+        val rr = t.synthesizeToFile(text, android.os.Bundle(), file, fid)
+        if (rr != TextToSpeech.SUCCESS) {
+            callbacks.remove(fid)
+            d("⚠ יצירת קובץ ההקראה נכשלה")
+            finish()
+        }
+    }
+
+    private fun routeToEar(
+        ctx: Context, am: AudioManager, file: File, ring: Boolean, session: Int, finish: () -> Unit
+    ) {
+        // הודעה רגילה: קודם מדיה (A2DP). שיחה נכנסת: ערוץ שיחה (SCO), כי בזמן צלצול ערוץ המדיה מושעה.
+        val a2dp = findOut(am, false)
+        if (!ring && a2dp != null) {
+            playOn(file, a2dp, false, finish)
+            return
+        }
+        startSco(am)
+        var tries = 0
+        fun check() {
+            if (ring && session != ringSession) {
+                finish()
+                return
+            }
+            val sco = findOut(am, true)
+            if (sco != null) {
+                playOn(file, sco, true, finish)
+            } else if (++tries < 20) {
+                main.postDelayed({ check() }, 200)
+            } else {
+                d("⚠ ערוץ השיחה לאוזנייה לא נפתח תוך 4 שניות - לא מקריא (כדי לא לשמוע ברמקול)")
+                finish()
+            }
+        }
+        check()
+    }
+
+    private fun playOn(file: File, dev: AudioDeviceInfo, voice: Boolean, finish: () -> Unit) {
+        try {
+            val mp = MediaPlayer()
+            earPlayer = mp
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(
+                        if (voice) AudioAttributes.USAGE_VOICE_COMMUNICATION
+                        else AudioAttributes.USAGE_MEDIA
+                    )
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            mp.setDataSource(file.absolutePath)
+            mp.setOnCompletionListener { m ->
+                try {
+                    m.release()
+                } catch (_: Exception) {
+                }
+                if (earPlayer === m) earPlayer = null
+                d("ההקראה באוזנייה הסתיימה")
+                finish()
+            }
+            mp.setOnErrorListener { m, _, _ ->
+                try {
+                    m.release()
+                } catch (_: Exception) {
+                }
+                if (earPlayer === m) earPlayer = null
+                d("⚠ שגיאת ניגון באוזנייה")
+                finish()
+                true
+            }
+            mp.prepare()
+            mp.setPreferredDevice(dev)
+            mp.start()
+            d("מנגן באוזנייה (" + (if (voice) "ערוץ שיחה" else "מדיה") + ")")
+        } catch (e: Exception) {
+            d("⚠ שגיאה בניגון לאוזנייה: ${e.message}")
+            finish()
         }
     }
 
@@ -206,8 +315,8 @@ object Speaker {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         return when {
             !p.enabled -> "האפליקציה כבויה"
-            !muted && am.ringerMode != AudioManager.RINGER_MODE_NORMAL -> "הטלפון על שקט/רטט"
-            !muted && am.getStreamVolume(AudioManager.STREAM_RING) == 0 -> "עוצמת צלצול 0"
+            !muted && !bluetoothConnected(am) && am.ringerMode != AudioManager.RINGER_MODE_NORMAL -> "הטלפון על שקט/רטט"
+            !muted && !bluetoothConnected(am) && am.getStreamVolume(AudioManager.STREAM_RING) == 0 -> "עוצמת צלצול 0"
             p.btOnly && !bluetoothConnected(am) -> "מוגדר 'רק בבלוטוס' ואין בלוטוס"
             else -> null
         }
@@ -307,6 +416,12 @@ object Speaker {
             tts?.stop()
         } catch (_: Exception) {
         }
+        try {
+            earPlayer?.stop()
+            earPlayer?.release()
+        } catch (_: Exception) {
+        }
+        earPlayer = null
         app?.let {
             unmuteRing(it)
             stopSco(it.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
@@ -405,7 +520,7 @@ object Speaker {
         if (!p.enabled) return false
         recoverRing(ctx)
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        if (!muted && isSilent(am)) return false
+        if (!muted && isSilent(am) && !bluetoothConnected(am)) return false
         if (p.btOnly && !bluetoothConnected(am)) return false
         return true
     }
