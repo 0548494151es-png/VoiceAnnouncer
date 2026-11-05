@@ -326,7 +326,7 @@ private fun Screen(tick: Int) {
                 ) { btAlsoSpeaker = it; prefs.btAlsoSpeaker = it }
                 ToggleRow(
                     "בלוטוס: להכריז דרך ערוץ השיחה של האוזנייה",
-                    "אם בזמן צלצול לא שומעים את שם המתקשר באוזנייה / ברכב, נסה להדליק",
+                    "אם בזמן צלצול לא שומעים את שם המתקשר באוזנייה, נסה להדליק. אם דלוק ולא שומעים, נסה לכבות",
                     btVoiceRoute, Blue
                 ) { btVoiceRoute = it; prefs.btVoiceRoute = it }
 

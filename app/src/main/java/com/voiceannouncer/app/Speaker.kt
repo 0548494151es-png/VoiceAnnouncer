@@ -2,6 +2,7 @@ package com.voiceannouncer.app
 
 import android.app.NotificationManager
 import android.content.Context
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -115,7 +116,7 @@ object Speaker {
         // בלוטוס: ההקראה נוצרת לקובץ ומנוגנת ישירות על האוזנייה (ולא על הרמקול)
         val useEar = btOn && ((ring && p.btVoiceRoute) || earOnly)
         if (useEar) {
-            speakToEar(ctx, t, text, ring, onDone)
+            speakToEar(ctx, t, text, ring, ring && p.btVoiceRoute, onDone)
             return
         }
         // בלוטוס מחובר + הוגדר "גם ברמקול": מכינים עותק של ההכרזה שיושמע ברמקול הטלפון
@@ -170,7 +171,9 @@ object Speaker {
      * יוצר קובץ הקראה ומנגן אותו ישירות על אוזניית הבלוטוס.
      * אם האוזנייה לא זמינה - לא מקריאים בכלל (כדי שלא יישמע ברמקול).
      */
-    private fun speakToEar(ctx: Context, t: TextToSpeech, text: String, ring: Boolean, onDone: (() -> Unit)?) {
+    private fun speakToEar(
+        ctx: Context, t: TextToSpeech, text: String, ring: Boolean, useSco: Boolean, onDone: (() -> Unit)?
+    ) {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val session = ringSession
         val file = File(ctx.cacheDir, "ear_${counter}.wav")
@@ -183,7 +186,8 @@ object Speaker {
                 file.delete()
             } catch (_: Exception) {
             }
-            stopSco(am)
+            // בזמן צלצול משאירים את ערוץ השיחה פתוח בין ההכרזות (נסגר ב-stopRinging)
+            if (!ring) stopSco(am)
             onDone?.invoke()
         }
         callbacks[fid] = {
@@ -193,7 +197,7 @@ object Speaker {
                 d("⚠ לא נוצר קובץ הקראה לאוזנייה")
                 finish()
             } else {
-                routeToEar(ctx, am, file, ring, session) { finish() }
+                routeToEar(ctx, am, file, ring, session, useSco) { finish() }
             }
         }
         d("הקראה לאוזנייה בלבד: \"${text.take(40)}\"")
@@ -205,14 +209,24 @@ object Speaker {
         }
     }
 
+    private fun scoConnected(ctx: Context): Boolean = try {
+        ctx.registerReceiver(null, IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED))
+            ?.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1) == AudioManager.SCO_AUDIO_STATE_CONNECTED
+    } catch (_: Exception) {
+        false
+    }
+
     private fun routeToEar(
-        ctx: Context, am: AudioManager, file: File, ring: Boolean, session: Int, finish: () -> Unit
+        ctx: Context, am: AudioManager, file: File, ring: Boolean, session: Int,
+        useSco: Boolean, finish: () -> Unit
     ) {
-        // הודעה רגילה: קודם מדיה (A2DP). שיחה נכנסת: ערוץ שיחה (SCO), כי בזמן צלצול ערוץ המדיה מושעה.
-        val a2dp = findOut(am, false)
-        if (!ring && a2dp != null) {
-            playOn(file, a2dp, false, finish)
-            return
+        // מדיה (A2DP) - ברירת מחדל. ערוץ שיחה (SCO) רק אם ההגדרה דולקת (או אם אין A2DP).
+        if (!useSco) {
+            val a2dp = findOut(am, false)
+            if (a2dp != null) {
+                playOn(file, a2dp, false, finish)
+                return
+            }
         }
         startSco(am)
         var tries = 0
@@ -222,12 +236,20 @@ object Speaker {
                 return
             }
             val sco = findOut(am, true)
-            if (sco != null) {
-                playOn(file, sco, true, finish)
-            } else if (++tries < 20) {
+            if (sco != null && scoConnected(ctx)) {
+                if (tries == 0) {
+                    playOn(file, sco, true, finish)
+                } else {
+                    d("ערוץ השיחה התחבר אחרי ${tries * 200} מילישניות")
+                    // רגע קצר אחרי החיבור, כדי שלא ייחתך תחילת המשפט
+                    main.postDelayed({
+                        if (ring && session != ringSession) finish() else playOn(file, sco, true, finish)
+                    }, 600)
+                }
+            } else if (++tries < 30) {
                 main.postDelayed({ check() }, 200)
             } else {
-                d("⚠ ערוץ השיחה לאוזנייה לא נפתח תוך 4 שניות - לא מקריא (כדי לא לשמוע ברמקול)")
+                d("⚠ ערוץ השיחה לאוזנייה לא התחבר תוך 6 שניות - לא מקריא (כדי לא לשמוע ברמקול)")
                 finish()
             }
         }
