@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">קורא הודעות</string>
+    <string name="tc_service_label">קורא הודעות - זיהוי Truecaller</string>
+    <string name="tc_service_desc">קורא את שם המתקשר שמוצג בחלון של Truecaller בזמן שיחה נכנסת, כדי שקורא הודעות יקריא אותו. השירות מקבל מידע רק מ-Truecaller ולא מאפליקציות אחרות.</string>
 </resources>

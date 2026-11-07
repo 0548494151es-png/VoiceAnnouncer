@@ -109,6 +109,16 @@ class Prefs(ctx: Context) {
         get() = s("tplPrivate", DEF_PRIVATE)
         set(v) = putS("tplPrivate", v)
 
+    /** לזהות מתקשרים שלא שמורים באנשי קשר גם לפי Truecaller (קורא את השם שהיא מציגה) */
+    var tcEnabled: Boolean
+        get() = b("tcEnabled", true)
+        set(v) = putB("tcEnabled", v)
+
+    /** נוסח ההכרזה: מתקשר שזוהה ב-Truecaller. משתנים: {name} {number} */
+    var tplTc: String
+        get() = s("tplTc", DEF_TC)
+        set(v) = putS("tplTc", v)
+
     /** נוסח הקראת הודעות. משתנים: {name} שולח, {text} תוכן ההודעה */
     var tplMessage: String
         get() = s("tplMessage", DEF_MESSAGE)
@@ -118,6 +128,7 @@ class Prefs(ctx: Context) {
         tplKnown = DEF_KNOWN
         tplUnknown = DEF_UNKNOWN
         tplPrivate = DEF_PRIVATE
+        tplTc = DEF_TC
         tplMessage = DEF_MESSAGE
     }
 
@@ -172,6 +183,7 @@ class Prefs(ctx: Context) {
         const val DEF_KNOWN = "{name}"
         const val DEF_UNKNOWN = "שיחה ממספר {number}"
         const val DEF_PRIVATE = "שיחה ממספר חסוי"
+        const val DEF_TC = "{name}"
         const val DEF_MESSAGE = "הודעה מ{name}. {text}"
     }
 }

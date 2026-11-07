@@ -53,6 +53,9 @@ class MessageListener : NotificationListenerService() {
         val pkg = sbn.packageName
         if (pkg == packageName) return
 
+        // התראת שיחה של Truecaller: לוקחים ממנה את שם המתקשר ולא מקריאים אותה כהודעה
+        if (pkg == TruecallerBridge.PKG && TruecallerBridge.fromNotification(this, sbn)) return
+
         val n = sbn.notification ?: return
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         if (n.flags and Notification.FLAG_ONGOING_EVENT != 0) return

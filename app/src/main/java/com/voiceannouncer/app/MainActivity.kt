@@ -132,6 +132,8 @@ private fun Screen(tick: Int) {
     var tplKnown by remember { mutableStateOf(prefs.tplKnown) }
     var tplUnknown by remember { mutableStateOf(prefs.tplUnknown) }
     var tplPrivate by remember { mutableStateOf(prefs.tplPrivate) }
+    var tplTc by remember { mutableStateOf(prefs.tplTc) }
+    var tcEnabled by remember { mutableStateOf(prefs.tcEnabled) }
     var tplMessage by remember { mutableStateOf(prefs.tplMessage) }
     var whatsapp by remember { mutableStateOf(prefs.whatsapp) }
     var sms by remember { mutableStateOf(prefs.sms) }
@@ -163,6 +165,7 @@ private fun Screen(tick: Int) {
         NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName)
     }
     val dndOk = remember(tick, permTick) { Speaker.canMuteRing(ctx) }
+    val tcAccOk = remember(tick, permTick) { TruecallerBridge.accessibilityOn(ctx) }
     val batteryOk = remember(tick, permTick) {
         (ctx.getSystemService(Context.POWER_SERVICE) as PowerManager)
             .isIgnoringBatteryOptimizations(ctx.packageName)
@@ -256,9 +259,20 @@ private fun Screen(tick: Int) {
                         ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
                     }
                 }
+                if (tcEnabled) {
+                    PermRow("זיהוי מתקשר ב-Truecaller (שירות נגישות)", tcAccOk, "פתח") {
+                        ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }
+                }
                 if (!listenerOk) {
                     Text(
                         "אם האפשרות 'גישה להתראות' אפורה: הגדרות ← אפליקציות ← קורא הודעות ← שלוש נקודות ← 'אפשר הגדרות מוגבלות'.",
+                        fontSize = 12.sp, color = Color.Gray
+                    )
+                }
+                if (tcEnabled && !tcAccOk) {
+                    Text(
+                        "בהגדרות הנגישות: 'אפליקציות מותקנות' ← 'קורא הודעות - זיהוי Truecaller' ← להפעיל. השירות מקבל מידע רק מ-Truecaller. אם האפשרות אפורה, אותה הגדרה של 'אפשר הגדרות מוגבלות' כמו למעלה.",
                         fontSize = 12.sp, color = Color.Gray
                     )
                 }
@@ -320,6 +334,11 @@ private fun Screen(tick: Int) {
                     muteRing, Teal
                 ) { muteRing = it; prefs.muteRing = it }
                 ToggleRow(
+                    "לזהות מתקשרים גם לפי Truecaller",
+                    "מי שלא שמור באנשי הקשר ו-Truecaller מזהה: מקריא את השם שלה, במקום מספר או 'מספר חסוי'",
+                    tcEnabled, Pink
+                ) { tcEnabled = it; prefs.tcEnabled = it }
+                ToggleRow(
                     "בלוטוס: להכריז גם ברמקול של הטלפון",
                     "כשמחובר בלוטוס, שם המתקשר יישמע גם בבלוטוס וגם ברמקול הטלפון",
                     btAlsoSpeaker, Blue
@@ -376,6 +395,14 @@ private fun Screen(tick: Int) {
                 )
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
+                    value = tplTc,
+                    onValueChange = { tplTc = it; prefs.tplTc = it },
+                    label = { Text("מתקשר שזוהה ב-Truecaller") },
+                    supportingText = { Text("{name} = השם ש-Truecaller מציגה, {number} = המספר") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
                     value = tplUnknown,
                     onValueChange = { tplUnknown = it; prefs.tplUnknown = it },
                     label = { Text("מספר לא שמור") },
@@ -394,6 +421,7 @@ private fun Screen(tick: Int) {
                     tplKnown = prefs.tplKnown
                     tplUnknown = prefs.tplUnknown
                     tplPrivate = prefs.tplPrivate
+                    tplTc = prefs.tplTc
                     tplMessage = prefs.tplMessage
                 }) { Text("↺ איפוס הנוסחים לברירת מחדל") }
 
