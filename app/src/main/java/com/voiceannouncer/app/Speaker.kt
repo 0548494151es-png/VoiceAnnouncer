@@ -1,6 +1,8 @@
 package com.voiceannouncer.app
 
 import android.app.NotificationManager
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.content.IntentFilter
 import android.media.AudioAttributes
@@ -8,31 +10,66 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import java.io.File
 import java.util.Locale
 
-/** מנוע ההקראה. אובייקט יחיד שחי כל עוד התהליך חי. תמיד נקרא מה-thread הראשי. */
+/**
+ * מנוע ההקראה. אובייקט יחיד שחי כל עוד התהליך חי. תמיד נקרא מה-thread הראשי.
+ *
+ * עמידות בפני תקלות (אחרי שעות בלי פעילות המנוע של המערכת יכול להתנתק או להיתקע):
+ *  - כל בקשה למנוע נמצאת תחת שעון עצר. אם לא מגיע "הסתיימה" בזמן, או שהמנוע מחזיר שגיאה,
+ *    המנוע מאותחל מחדש והבקשה נשלחת שוב (פעם אחת).
+ *  - לפני כל הקראה נבדקת האוזנייה בפועל (התקן שמע פעיל + חיבור פרופיל הבלוטוס).
+ *  - סיבת כל כישלון נרשמת ביומן (DiagLog.fail).
+ */
 object Speaker {
+    /** בקשת הקראה אחת. נשמרת כדי שאפשר יהיה לשלוח אותה שוב אם המנוע נכשל. */
     private class Item(
         val text: String,
         val rate: Float?,
         val ring: Boolean,
         val force: Boolean,
-        val cb: (() -> Unit)?
-    )
+        val cb: (() -> Unit)?,
+        val session: Int,
+        val attempt: Int
+    ) {
+        fun again() = Item(text, rate, ring, force, cb, session, attempt + 1)
+    }
+
+    /** בקשה שנשלחה למנוע וממתינה לסיום. onComplete = מה עושים כשהמנוע מסיים. */
+    private class Job(val item: Item, val retryable: Boolean, val onComplete: () -> Unit) {
+        var started = false
+    }
+
+    /** מצב האוזנייה: connected = מחוברת (לפי ההתקן או הפרופיל), routed = ערוץ השמע שלה פעיל בפועל */
+    private class Ear(val connected: Boolean, val routed: Boolean, val detail: String)
+
+    private const val MAX_ATTEMPTS = 2            // ניסיון ראשון + ניסיון חוזר אחד אחרי אתחול המנוע
+    private const val READY_TIMEOUT_MS = 8_000L   // כמה מחכים שהמנוע יעלה
+    private const val EAR_WAIT_MS = 2_000L        // כמה מחכים שערוץ השמע של האוזנייה יעלה
+    private const val EAR_POLL_MS = 200L
+    private const val IDLE_CHECK_MS = 10 * 60_000L // אחרי כמה זמן בלי פעילות בודקים שהמנוע חי
 
     private var tts: TextToSpeech? = null
     private var ready = false
     private var app: Context? = null
     private val main = Handler(Looper.getMainLooper())
     private val pending = ArrayList<Item>()
-    private val callbacks = HashMap<String, (() -> Unit)?>()
+    private val inflight = HashMap<String, Job>()
+    private val watches = HashMap<String, Runnable>()
     private var counter = 0
+    private var engineGen = 0
+    private var initFails = 0
+    private var readyWatch: Runnable? = null
+    private var hadVoices = false
+    private var lastOk = SystemClock.elapsedRealtime()
 
     // ---- מצב הכרזת שיחה ----
     private var ringRunnable: Runnable? = null
@@ -44,56 +81,278 @@ object Speaker {
     private var savedVol = 0
     private val safetyUnmute = Runnable { app?.let { unmuteRing(it) } }
 
+    private val listener = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) {
+            main.post { started(utteranceId) }
+        }
+
+        override fun onDone(utteranceId: String?) {
+            main.post {
+                d("ההקראה הסתיימה ($utteranceId)")
+                lastOk = SystemClock.elapsedRealtime()
+                complete(utteranceId)
+            }
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String?) {
+            main.post { failed(utteranceId, TextToSpeech.ERROR) }
+        }
+
+        override fun onError(utteranceId: String?, errorCode: Int) {
+            main.post { failed(utteranceId, errorCode) }
+        }
+
+        override fun onStop(utteranceId: String?, interrupted: Boolean) {
+            main.post { complete(utteranceId) }
+        }
+    }
+
     fun init(ctx: Context) {
         if (tts != null) return
         val a = ctx.applicationContext
         app = a
         recoverRing(a)
+        val gen = ++engineGen
         tts = TextToSpeech(a) { status ->
-            main.post {
-                val t = tts
-                if (status == TextToSpeech.SUCCESS && t != null) {
-                    t.language = Locale("he", "IL")
-                    t.setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build()
-                    )
-                    t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(utteranceId: String?) {
-                            d("ההקראה התחילה להישמע ($utteranceId)")
-                        }
-                        override fun onDone(utteranceId: String?) {
-                            d("ההקראה הסתיימה ($utteranceId)")
-                            main.post { callbacks.remove(utteranceId)?.invoke() }
-                        }
-                        @Deprecated("Deprecated in Java")
-                        override fun onError(utteranceId: String?) {
-                            d("⚠ שגיאת הקראה ($utteranceId)")
-                            main.post { callbacks.remove(utteranceId)?.invoke() }
-                        }
-                        override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                            main.post { callbacks.remove(utteranceId)?.invoke() }
-                        }
-                    })
-                    ready = true
-                    val list = ArrayList(pending)
-                    pending.clear()
-                    for (item in list) speakInternal(a, item.text, item.rate, item.ring, item.force, item.cb)
-                } else {
-                    tts = null
-                }
+            main.post { onEngineReady(a, gen, status) }
+        }
+    }
+
+    private fun onEngineReady(a: Context, gen: Int, status: Int) {
+        if (gen != engineGen) return // מנוע ישן שכבר הוחלף
+        val t = tts
+        if (status == TextToSpeech.SUCCESS && t != null) {
+            try {
+                t.language = Locale("he", "IL")
+            } catch (_: Throwable) {
+            }
+            try {
+                t.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+            } catch (_: Throwable) {
+            }
+            t.setOnUtteranceProgressListener(listener)
+            ready = true
+            initFails = 0
+            readyWatch?.let { main.removeCallbacks(it) }
+            readyWatch = null
+            lastOk = SystemClock.elapsedRealtime()
+            hadVoices = engineAlive(t)
+            d("מנוע ההקראה מוכן (${engineName(t)})")
+            val list = ArrayList(pending)
+            pending.clear()
+            for (item in list) {
+                speakInternal(a, item.text, item.rate, item.ring, item.force, item.session, item.attempt, EAR_WAIT_MS, item.cb)
+            }
+        } else {
+            fail("אתחול מנוע ההקראה נכשל (status=$status, מנוע=${engineName(t)})")
+            try {
+                t?.shutdown()
+            } catch (_: Throwable) {
+            }
+            tts = null
+            ready = false
+            initFails++
+            if (initFails < 3) {
+                main.postDelayed({ if (tts == null && pending.isNotEmpty()) init(a) }, 1_500L)
+            } else {
+                initFails = 0
+                failPending("מנוע ההקראה לא עלה אחרי 3 ניסיונות")
             }
         }
     }
 
+    /** אם המנוע לא מוכן אחרי READY_TIMEOUT_MS - מאתחלים אותו מחדש (עד פעמיים), ואז מוותרים */
+    private fun armReadyWatch() {
+        if (readyWatch != null) return
+        val r = Runnable {
+            readyWatch = null
+            if (ready) return@Runnable
+            val a = app ?: return@Runnable
+            initFails++
+            if (initFails <= 2) {
+                fail("מנוע ההקראה לא הוכן תוך ${READY_TIMEOUT_MS / 1000} שניות (ניסיון $initFails)")
+                val old = tts
+                tts = null
+                try {
+                    old?.shutdown()
+                } catch (_: Throwable) {
+                }
+                init(a)
+                armReadyWatch()
+            } else {
+                initFails = 0
+                failPending("מנוע ההקראה לא עלה")
+            }
+        }
+        readyWatch = r
+        main.postDelayed(r, READY_TIMEOUT_MS)
+    }
+
+    /** משחרר את כל מה שחיכה למנוע שלא עלה (כדי שהכרזות לא יישארו תלויות) */
+    private fun failPending(reason: String) {
+        fail(reason)
+        val list = ArrayList(pending)
+        pending.clear()
+        for (item in list) item.cb?.invoke()
+    }
+
+    // ---- מעקב אחרי בקשות שנשלחו למנוע ----
+
+    private fun estMs(item: Item): Long {
+        val r = (item.rate ?: app?.let { Prefs(it).rate } ?: 1f).coerceIn(0.3f, 3f)
+        return (6_000L + (item.text.length * 90L / r).toLong()).coerceAtMost(60_000L)
+    }
+
+    /** זמן המתנה עד שההקראה אמורה להתחיל: כולל מה שכבר בתור לפניה */
+    private fun startTimeout(item: Item): Long {
+        var ahead = 0L
+        for (j in inflight.values) ahead += estMs(j.item)
+        return (if (item.ring) 5_000L else 8_000L) + ahead
+    }
+
+    private fun arm(id: String, ms: Long) {
+        watches.remove(id)?.let { main.removeCallbacks(it) }
+        val r = Runnable { onTimeout(id, ms) }
+        watches[id] = r
+        main.postDelayed(r, ms)
+    }
+
+    private fun track(id: String, job: Job, startMs: Long) {
+        inflight[id] = job
+        arm(id, startMs)
+    }
+
+    private fun untrack(id: String): Job? {
+        watches.remove(id)?.let { main.removeCallbacks(it) }
+        return inflight.remove(id)
+    }
+
+    private fun started(id: String?) {
+        if (id == null) return
+        d("ההקראה התחילה להישמע ($id)")
+        val job = inflight[id] ?: return
+        job.started = true
+        arm(id, estMs(job.item))
+    }
+
+    private fun complete(id: String?) {
+        if (id == null) return
+        val job = untrack(id) ?: return
+        job.onComplete()
+    }
+
+    private fun failed(id: String?, code: Int) {
+        if (id == null) return
+        val job = untrack(id) ?: return
+        retry(job, "שגיאת מנוע ההקראה (${errName(code)})")
+    }
+
+    private fun onTimeout(id: String, ms: Long) {
+        watches.remove(id)
+        val job = inflight.remove(id) ?: return
+        val why = if (job.started) {
+            "ההקראה התחילה ולא הסתיימה תוך ${ms / 1000} שניות (נתקעה)"
+        } else {
+            "ההקראה לא התחילה תוך ${ms / 1000} שניות (המנוע לא מגיב)"
+        }
+        retry(job, why)
+    }
+
+    /** בקשה נכשלה: רושמים את הסיבה, מאתחלים את המנוע ושולחים שוב. אחרי הניסיון האחרון משחררים את ההכרזה. */
+    private fun retry(job: Job, reason: String) {
+        val item = job.item
+        if (!job.retryable) return
+        // השיחה כבר הסתיימה או הוחלפה בהכרזה חדשה: אין מה לנסות שוב, וזה לא כשל
+        if (item.ring && item.session != ringSession) {
+            item.cb?.invoke()
+            return
+        }
+        fail("$reason | \"${item.text.take(30)}\" | ניסיון ${item.attempt + 1} מתוך $MAX_ATTEMPTS")
+        if (item.attempt + 1 < MAX_ATTEMPTS) {
+            pending.add(0, item.again())
+            resetEngine(reason)
+        } else {
+            fail("ויתרתי על ההקראה אחרי $MAX_ATTEMPTS ניסיונות: \"${item.text.take(30)}\"")
+            item.cb?.invoke()
+        }
+    }
+
+    /** מאתחל את מנוע ההקראה. מה שהיה באמצע חוזר לתור, כי הוא הולך לאיבוד יחד עם המנוע הישן. */
+    private fun resetEngine(reason: String) {
+        val a = app ?: return
+        d("מאתחל את מנוע ההקראה: $reason")
+        for (id in ArrayList(inflight.keys)) {
+            val job = untrack(id) ?: continue
+            if (!job.retryable) continue
+            val item = job.item
+            if (item.ring && item.session != ringSession) {
+                item.cb?.invoke()
+            } else if (item.attempt + 1 < MAX_ATTEMPTS) {
+                pending.add(item.again())
+            } else {
+                item.cb?.invoke()
+            }
+        }
+        val old = tts
+        tts = null
+        ready = false
+        try {
+            old?.stop()
+        } catch (_: Throwable) {
+        }
+        try {
+            old?.shutdown()
+        } catch (_: Throwable) {
+        }
+        init(a)
+        armReadyWatch()
+    }
+
+    private fun engineAlive(t: TextToSpeech): Boolean = try {
+        !t.voices.isNullOrEmpty()
+    } catch (_: Throwable) {
+        false
+    }
+
+    private fun engineName(t: TextToSpeech?): String = try {
+        t?.defaultEngine ?: "?"
+    } catch (_: Throwable) {
+        "?"
+    }
+
+    private fun errName(code: Int): String {
+        val n = when (code) {
+            TextToSpeech.ERROR_SYNTHESIS -> "סינתזה"
+            TextToSpeech.ERROR_SERVICE -> "שירות"
+            TextToSpeech.ERROR_OUTPUT -> "פלט"
+            TextToSpeech.ERROR_NETWORK -> "רשת"
+            TextToSpeech.ERROR_NETWORK_TIMEOUT -> "זמן רשת"
+            TextToSpeech.ERROR_INVALID_REQUEST -> "בקשה לא תקינה"
+            TextToSpeech.ERROR_NOT_INSTALLED_YET -> "קול לא מותקן"
+            else -> "כללית"
+        }
+        return "$n, קוד $code"
+    }
+
     fun speak(ctx: Context, text: String, onDone: (() -> Unit)? = null) =
-        speakInternal(ctx, text, null, false, false, onDone)
+        speakInternal(ctx, text, null, false, false, onDone = onDone)
 
     private fun speakInternal(
-        ctx: Context, text: String, rate: Float?, ring: Boolean, force: Boolean, onDone: (() -> Unit)?
+        ctx: Context, text: String, rate: Float?, ring: Boolean, force: Boolean,
+        session: Int = ringSession, attempt: Int = 0, earWaitLeft: Long = EAR_WAIT_MS,
+        onDone: (() -> Unit)?
     ) {
+        // ההכרזה הזו כבר לא רלוונטית (השיחה הסתיימה או הוחלפה בהכרזה חדשה)
+        if (ring && session != ringSession) {
+            onDone?.invoke()
+            return
+        }
         // בדיקה מרכזית: על שקט / רטט לא מקריאים שום דבר, בלי קשר מי ביקש
         if (!force && !allowed(ctx)) {
             onDone?.invoke()
@@ -102,37 +361,62 @@ object Speaker {
         init(ctx)
         val t = tts
         if (!ready || t == null) {
-            pending.add(Item(text, rate, ring, force, onDone))
+            pending.add(Item(text, rate, ring, force, onDone, session, attempt))
+            armReadyWatch()
+            return
+        }
+        // אחרי הרבה זמן בלי פעילות: בודקים שהמנוע עדיין חי, ואם לא - מאתחלים לפני ההקראה
+        val idleMs = SystemClock.elapsedRealtime() - lastOk
+        if (hadVoices && idleMs > IDLE_CHECK_MS && !engineAlive(t)) {
+            val why = "מנוע ההקראה לא מגיב אחרי ${idleMs / 60_000} דקות בלי פעילות"
+            fail(why)
+            pending.add(0, Item(text, rate, ring, force, onDone, session, attempt))
+            resetEngine(why)
             return
         }
         val p = Prefs(ctx)
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        // בדיקת אוזנייה בפועל, לפני כל הקראה
+        val ear = headsetState(am)
+        val btOn = ear.routed
+        val silent = isSilent(am)
+        // מצבים שבהם מותר להקריא רק באוזנייה ובשום אופן לא ברמקול הטלפון
+        val needEar = silent || p.btOnly || (ring && p.btVoiceRoute)
+        if (ear.connected && !btOn && needEar) {
+            if (earWaitLeft > 0) {
+                // האוזנייה מחוברת לפי הפרופיל, אבל ערוץ השמע שלה עוד לא עלה: ממתינים רגע
+                main.postDelayed({
+                    speakInternal(ctx, text, rate, ring, force, session, attempt, earWaitLeft - EAR_POLL_MS, onDone)
+                }, EAR_POLL_MS)
+                return
+            }
+            fail("האוזנייה מחוברת אבל ערוץ השמע שלה לא זמין (${ear.detail}) - לא מקריא כדי לא לשמוע ברמקול")
+            onDone?.invoke()
+            return
+        }
         t.setPitch(p.pitch)
         t.setSpeechRate(rate ?: p.rate)
         applyVoice(t, p.voice)
-        val am2 = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val btOn = bluetoothConnected(am2)
+        val item = Item(text, rate, ring, force, onDone, session, attempt)
         // בלוטוס + שקט/רטט: מקריאים רק באוזנייה, ובשום אופן לא ברמקול הטלפון
-        val earOnly = btOn && !muted && isSilent(am2)
+        val earOnly = btOn && !muted && silent
         // בלוטוס: ההקראה נוצרת לקובץ ומנוגנת ישירות על האוזנייה (ולא על הרמקול)
         val useEar = btOn && ((ring && p.btVoiceRoute) || earOnly)
         if (useEar) {
-            speakToEar(ctx, t, text, ring, ring && p.btVoiceRoute, onDone)
+            speakToEar(ctx, t, item, ring && p.btVoiceRoute)
             return
         }
         // בלוטוס מחובר + הוגדר "גם ברמקול": מכינים עותק של ההכרזה שיושמע ברמקול הטלפון
-        if (ring && p.btAlsoSpeaker) {
+        if (ring && p.btAlsoSpeaker && btOn) {
             try {
-                val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                if (bluetoothConnected(am)) {
-                    val s = ringSession
-                    val dir = ctx.cacheDir
-                    dir.listFiles()?.filter { it.name.startsWith("spk_") }?.forEach { it.delete() }
-                    val f = File(dir, "spk_${counter}.wav")
-                    val fid = "f${counter++}"
-                    callbacks[fid] = { if (s == ringSession) playOnPhoneSpeaker(ctx, f) }
-                    val rr = t.synthesizeToFile(text, android.os.Bundle(), f, fid)
-                    if (rr != TextToSpeech.SUCCESS) callbacks.remove(fid)
-                }
+                val dir = ctx.cacheDir
+                dir.listFiles()?.filter { it.name.startsWith("spk_") }?.forEach { it.delete() }
+                val f = File(dir, "spk_${counter}.wav")
+                val fid = "f${counter++}"
+                val copy = Job(item, false) { if (session == ringSession) playOnPhoneSpeaker(ctx, f) }
+                track(fid, copy, startTimeout(item))
+                val rr = t.synthesizeToFile(text, Bundle(), f, fid)
+                if (rr != TextToSpeech.SUCCESS) untrack(fid)
             } catch (_: Exception) {
             }
         }
@@ -146,12 +430,16 @@ object Speaker {
             )
         } catch (_: Exception) {
         }
-        callbacks[id] = onDone
-        val r = t.speak(text, TextToSpeech.QUEUE_ADD, null, id)
+        track(id, Job(item, true) { onDone?.invoke() }, startTimeout(item))
+        val r = try {
+            t.speak(text, TextToSpeech.QUEUE_ADD, null, id)
+        } catch (_: Throwable) {
+            TextToSpeech.ERROR
+        }
         d("הקראה (\"${text.take(40)}\"): " + (if (r == TextToSpeech.SUCCESS) "נשלחה" else "נכשלה") + " | בלוטוס=$btOn")
         if (r != TextToSpeech.SUCCESS) {
-            callbacks.remove(id)
-            onDone?.invoke()
+            val job = untrack(id)
+            if (job != null) retry(job, "הפקודה speak נכשלה (קוד $r)")
         }
     }
 
@@ -171,11 +459,19 @@ object Speaker {
      * יוצר קובץ הקראה ומנגן אותו ישירות על אוזניית הבלוטוס.
      * אם האוזנייה לא זמינה - לא מקריאים בכלל (כדי שלא יישמע ברמקול).
      */
-    private fun speakToEar(
-        ctx: Context, t: TextToSpeech, text: String, ring: Boolean, useSco: Boolean, onDone: (() -> Unit)?
-    ) {
+    private fun speakToEar(ctx: Context, t: TextToSpeech, item: Item, useSco: Boolean) {
+        val text = item.text
+        val ring = item.ring
+        val onDone = item.cb
+        val session = item.session
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val session = ringSession
+        try {
+            val cutoff = System.currentTimeMillis() - 5 * 60_000L
+            ctx.cacheDir.listFiles()
+                ?.filter { it.name.startsWith("ear_") && it.lastModified() < cutoff }
+                ?.forEach { it.delete() }
+        } catch (_: Exception) {
+        }
         val file = File(ctx.cacheDir, "ear_${counter}.wav")
         val fid = "e${counter++}"
         var finished = false
@@ -190,22 +486,33 @@ object Speaker {
             if (!ring) stopSco(am)
             onDone?.invoke()
         }
-        callbacks[fid] = {
+        val job = Job(item, true) {
             if (ring && session != ringSession) {
                 finish()
             } else if (!file.exists() || file.length() < 100) {
-                d("⚠ לא נוצר קובץ הקראה לאוזנייה")
-                finish()
+                try {
+                    file.delete()
+                } catch (_: Exception) {
+                }
+                retry(Job(item, true) {}, "לא נוצר קובץ הקראה לאוזנייה (הקובץ ריק)")
             } else {
                 routeToEar(ctx, am, file, ring, session, useSco) { finish() }
             }
         }
         d("הקראה לאוזנייה בלבד: \"${text.take(40)}\"")
-        val rr = t.synthesizeToFile(text, android.os.Bundle(), file, fid)
+        track(fid, job, startTimeout(item))
+        val rr = try {
+            t.synthesizeToFile(text, Bundle(), file, fid)
+        } catch (_: Throwable) {
+            TextToSpeech.ERROR
+        }
         if (rr != TextToSpeech.SUCCESS) {
-            callbacks.remove(fid)
-            d("⚠ יצירת קובץ ההקראה נכשלה")
-            finish()
+            val j = untrack(fid)
+            try {
+                file.delete()
+            } catch (_: Exception) {
+            }
+            if (j != null) retry(j, "יצירת קובץ ההקראה נכשלה (קוד $rr)")
         }
     }
 
@@ -249,16 +556,32 @@ object Speaker {
             } else if (++tries < 30) {
                 main.postDelayed({ check() }, 200)
             } else {
-                d("⚠ ערוץ השיחה לאוזנייה לא התחבר תוך 6 שניות - לא מקריא (כדי לא לשמוע ברמקול)")
+                fail("ערוץ השיחה לאוזנייה לא התחבר תוך 6 שניות - לא מקריא (כדי לא לשמוע ברמקול) | ${headsetState(am).detail}")
                 finish()
             }
         }
         check()
     }
 
+    /** מנגן קובץ על האוזנייה. עם שעון עצר: אם הניגון לא מסתיים, משחררים ורושמים כשל. */
     private fun playOn(file: File, dev: AudioDeviceInfo, voice: Boolean, finish: () -> Unit) {
+        var watchdog: Runnable? = null
+        var player: MediaPlayer? = null
+        fun end(problem: String?) {
+            watchdog?.let { main.removeCallbacks(it) }
+            watchdog = null
+            val m = player
+            try {
+                m?.release()
+            } catch (_: Exception) {
+            }
+            if (earPlayer === m) earPlayer = null
+            if (problem != null) fail(problem)
+            finish()
+        }
         try {
             val mp = MediaPlayer()
+            player = mp
             earPlayer = mp
             mp.setAudioAttributes(
                 AudioAttributes.Builder()
@@ -270,32 +593,40 @@ object Speaker {
                     .build()
             )
             mp.setDataSource(file.absolutePath)
-            mp.setOnCompletionListener { m ->
-                try {
-                    m.release()
-                } catch (_: Exception) {
-                }
-                if (earPlayer === m) earPlayer = null
+            mp.setOnCompletionListener {
                 d("ההקראה באוזנייה הסתיימה")
-                finish()
+                lastOk = SystemClock.elapsedRealtime()
+                end(null)
             }
-            mp.setOnErrorListener { m, _, _ ->
-                try {
-                    m.release()
-                } catch (_: Exception) {
-                }
-                if (earPlayer === m) earPlayer = null
-                d("⚠ שגיאת ניגון באוזנייה")
-                finish()
+            mp.setOnErrorListener { _, what, extra ->
+                end("שגיאת ניגון באוזנייה (what=$what, extra=$extra)")
                 true
             }
             mp.prepare()
-            mp.setPreferredDevice(dev)
+            val accepted = mp.setPreferredDevice(dev)
+            if (!accepted) {
+                val am = app?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                @Suppress("DEPRECATION")
+                val btRoute = voice || (am?.isBluetoothA2dpOn == true)
+                d("⚠ המערכת דחתה את ההתקן המועדף (${typeName(dev.type)}), ערוץ בלוטוס פעיל=$btRoute")
+                if (!btRoute) {
+                    end("האוזנייה לא קיבלה את הניגון (ההתקן נדחה) - לא מנגן כדי לא לשמוע ברמקול")
+                    return
+                }
+            }
             mp.start()
             d("מנגן באוזנייה (" + (if (voice) "ערוץ שיחה" else "מדיה") + ")")
+            val dur = try {
+                mp.duration
+            } catch (_: Exception) {
+                0
+            }
+            val waitMs = (if (dur > 0) dur else 10_000) + 4_000L
+            val r = Runnable { end("הניגון באוזנייה לא הסתיים תוך ${waitMs / 1000} שניות (נתקע)") }
+            watchdog = r
+            main.postDelayed(r, waitMs)
         } catch (e: Exception) {
-            d("⚠ שגיאה בניגון לאוזנייה: ${e.message}")
-            finish()
+            end("שגיאה בניגון לאוזנייה: ${e.message}")
         }
     }
 
@@ -329,6 +660,13 @@ object Speaker {
 
     private fun d(msg: String) {
         app?.let { DiagLog.log(it, msg) }
+    }
+
+    /** רושם כשל הקראה ביומן, עם הסיבה ומצב המנוע */
+    private fun fail(reason: String) {
+        val a = app ?: return
+        val idleMin = (SystemClock.elapsedRealtime() - lastOk) / 60_000
+        DiagLog.fail(a, "$reason | מנוע=${engineName(tts)} | הצלחה אחרונה לפני $idleMin דק'")
     }
 
     /** למה לא מקריאים כרגע (null = מותר) */
@@ -417,7 +755,7 @@ object Speaker {
             if (!force && !allowed(a)) return
             n++
             if (doMute) muteRing(a)
-            speakInternal(a, text, rate, true, force) {
+            speakInternal(a, text, rate, true, force, session) {
                 if (doMute) unmuteRing(a)
                 if (session == ringSession && n < total) {
                     val r = Runnable { round() }
@@ -434,6 +772,10 @@ object Speaker {
         ringRunnable?.let { main.removeCallbacks(it) }
         ringRunnable = null
         pending.removeAll { it.ring }
+        // בקשות הכרזה שעדיין ממתינות למנוע כבר לא רלוונטיות (אין צורך בשעון עצר עליהן)
+        for (id in ArrayList(inflight.keys)) {
+            if (inflight[id]?.item?.ring == true) untrack(id)
+        }
         try {
             tts?.stop()
         } catch (_: Exception) {
@@ -552,14 +894,51 @@ object Speaker {
         am.ringerMode != AudioManager.RINGER_MODE_NORMAL ||
             am.getStreamVolume(AudioManager.STREAM_RING) == 0
 
-    private fun bluetoothConnected(am: AudioManager): Boolean {
-        val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        return devices.any {
-            when (it.type) {
-                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> true
-                else -> Build.VERSION.SDK_INT >= 31 &&
-                    (it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || it.type == AudioDeviceInfo.TYPE_BLE_SPEAKER)
-            }
+    // ---- בדיקת אוזנייה בפועל ----
+
+    private fun isBtOut(type: Int): Boolean = when (type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> true
+        else -> Build.VERSION.SDK_INT >= 31 &&
+            (type == AudioDeviceInfo.TYPE_BLE_HEADSET || type == AudioDeviceInfo.TYPE_BLE_SPEAKER)
+    }
+
+    private fun typeName(type: Int): String = when (type) {
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "רמקול"
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "BT-A2DP"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "BT-SCO"
+        else -> if (Build.VERSION.SDK_INT >= 31 && type == AudioDeviceInfo.TYPE_BLE_HEADSET) "BLE" else "סוג$type"
+    }
+
+    /** האם פרופיל הבלוטוס (מדיה או דיבורית) מחובר. null = לא ידוע (אין הרשאה, אין בלוטוס וכו') */
+    @Suppress("DEPRECATION", "MissingPermission")
+    private fun btProfileConnected(): Boolean? {
+        return try {
+            val ad = BluetoothAdapter.getDefaultAdapter() ?: return null
+            if (!ad.isEnabled) return false
+            ad.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED ||
+                ad.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED
+        } catch (_: Throwable) {
+            null
         }
     }
+
+    /**
+     * מצב האוזנייה בפועל, בשתי בדיקות: האם ערוץ השמע שלה קיים ברשימת ההתקנים של המערכת,
+     * והאם פרופיל הבלוטוס מחובר. אם הפרופיל מחובר אבל ערוץ השמע עוד לא עלה, ממתינים רגע לפני ההקראה.
+     */
+    private fun headsetState(am: AudioManager): Ear {
+        val outs = try {
+            am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { isBtOut(it.type) }
+        } catch (_: Throwable) {
+            emptyList<AudioDeviceInfo>()
+        }
+        val profile = btProfileConnected()
+        val routed = outs.isNotEmpty()
+        val connected = routed || profile == true
+        val detail = "התקני שמע=[" + outs.joinToString(",") { typeName(it.type) } + "] פרופיל=" +
+            (profile?.toString() ?: "לא ידוע")
+        return Ear(connected, routed, detail)
+    }
+
+    private fun bluetoothConnected(am: AudioManager): Boolean = headsetState(am).connected
 }

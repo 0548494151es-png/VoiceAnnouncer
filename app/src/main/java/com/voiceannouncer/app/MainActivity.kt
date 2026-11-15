@@ -510,10 +510,10 @@ private fun Screen(tick: Int) {
                     "מה קרה בכל הקראה ולמה משהו לא הוקרא. אם משהו לא עובד, לחץ 'שתף' ושלח לי.",
                     fontSize = 13.sp
                 )
-                val logText = remember(tick, permTick, diagTick) { DiagLog.text(ctx) }
+                val logText = remember(tick, permTick, diagTick) { DiagLog.screen(ctx) }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (logText.isBlank()) "(היומן ריק)" else logText.split("\n").takeLast(15).joinToString("\n"),
+                    if (logText.isBlank()) "(היומן ריק)" else logText,
                     fontSize = 11.sp
                 )
                 Row(Modifier.fillMaxWidth()) {
@@ -521,7 +521,7 @@ private fun Screen(tick: Int) {
                     TextButton(onClick = {
                         val send = Intent(Intent.ACTION_SEND)
                             .setType("text/plain")
-                            .putExtra(Intent.EXTRA_TEXT, DiagLog.text(ctx))
+                            .putExtra(Intent.EXTRA_TEXT, DiagLog.full(ctx))
                         ctx.startActivity(Intent.createChooser(send, "שתף יומן").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     }) { Text("📤 שתף") }
                     TextButton(onClick = { DiagLog.clear(ctx); diagTick++ }) { Text("🗑 נקה") }

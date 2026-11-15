@@ -18,6 +18,8 @@
     <!-- הכרזה דרך ערוץ השיחה של אוזניית בלוטוס -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- בדיקת חיבור האוזנייה בפועל לפני כל הקראה (באנדרואיד 11 ומטה ההרשאה הזו היא שמאפשרת את הבדיקה) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
 
     <queries>
         <intent>
