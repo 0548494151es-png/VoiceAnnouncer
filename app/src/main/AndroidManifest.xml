@@ -107,5 +107,30 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+    
+    <!-- הקראת מסך בלחיצה על כפתור צף (שירות נגישות) -->
+    <service
+        android:name=".ScreenReaderService"
+        android:exported="true"
+        android:label="@string/sr_service_label"
+        android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+        <intent-filter>
+            <action android:name="android.accessibilityservice.AccessibilityService" />
+        </intent-filter>
+        <meta-data
+            android:name="android.accessibilityservice"
+            android:resource="@xml/screen_reader_accessibility" />
+    </service>
+
+    <!-- מסך הגדרות הקראת המסך (אייקון נפרד) -->
+    <activity
+        android:name=".ScreenReaderSettingsActivity"
+        android:exported="true"
+        android:label="@string/sr_activity_label">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity>
     </application>
 </manifest>

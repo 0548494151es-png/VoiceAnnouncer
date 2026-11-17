@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  שירות נגישות להקראת המסך בלחיצה על כפתור צף.
+  השירות לא עושה כלום באירועים; הוא קורא את תוכן המסך רק ברגע שלוחצים על הכפתור.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/sr_service_desc"
+    android:notificationTimeout="500"
+    android:settingsActivity="com.voiceannouncer.app.ScreenReaderSettingsActivity" />

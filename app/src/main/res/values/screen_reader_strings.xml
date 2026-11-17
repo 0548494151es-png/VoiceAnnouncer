@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sr_service_label">קורא הודעות - הקראת מסך</string>
+    <string name="sr_service_desc">מקריא בקול את הטקסט שמוצג על המסך, רק כשלוחצים על הכפתור הצף. השירות קורא את תוכן המסך הנוכחי בלבד ברגע הלחיצה, ואינו שומר אותו. כיתוב באנגלית אפשר לתרגם לעברית דרך האינטרנט.</string>
+    <string name="sr_activity_label">הקראת מסך</string>
+</resources>
