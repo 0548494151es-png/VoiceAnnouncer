@@ -124,6 +124,12 @@ private fun Screen(tick: Int) {
     var repeatForever by remember { mutableStateOf(prefs.repeatForever) }
     var gapSec by remember { mutableIntStateOf(prefs.repeatGapSec) }
     var callRate by remember { mutableStateOf(prefs.callRate) }
+    var announceVol by remember { mutableIntStateOf(prefs.announceVol.coerceAtLeast(10)) }
+    var callRingVol by remember { mutableIntStateOf(prefs.callRingVol.coerceAtLeast(1)) }
+    val ringMax = remember {
+        ((ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager)
+            .getStreamMaxVolume(android.media.AudioManager.STREAM_RING)).coerceAtLeast(2)
+    }
     var muteRing by remember { mutableStateOf(prefs.muteRing) }
     var btAlsoSpeaker by remember { mutableStateOf(prefs.btAlsoSpeaker) }
     var btVoiceRoute by remember { mutableStateOf(prefs.btVoiceRoute) }
@@ -374,6 +380,25 @@ private fun Screen(tick: Int) {
                     valueRange = 1f..30f,
                     steps = 28,
                     colors = SliderDefaults.colors(thumbColor = Pink, activeTrackColor = Pink)
+                )
+
+                Text("עוצמת ההקראה (שם מתקשר והודעות): $announceVol%", fontSize = 14.sp)
+                Slider(
+                    value = announceVol.toFloat(),
+                    onValueChange = {
+                        announceVol = ((it / 5f).roundToInt() * 5).coerceIn(10, 100)
+                        prefs.announceVol = announceVol
+                    },
+                    valueRange = 10f..100f,
+                    colors = SliderDefaults.colors(thumbColor = Blue, activeTrackColor = Blue)
+                )
+                Text("עוצמת הצלצול בזמן שיחה נכנסת: $callRingVol מתוך $ringMax", fontSize = 14.sp)
+                Slider(
+                    value = callRingVol.toFloat(),
+                    onValueChange = { callRingVol = it.roundToInt().coerceIn(1, ringMax); prefs.callRingVol = callRingVol },
+                    valueRange = 1f..ringMax.toFloat(),
+                    steps = (ringMax - 2).coerceAtLeast(0),
+                    colors = SliderDefaults.colors(thumbColor = Orange, activeTrackColor = Orange)
                 )
 
                 Text("מהירות הכרזה: ${"%.2f".format(callRate)}", fontSize = 14.sp)

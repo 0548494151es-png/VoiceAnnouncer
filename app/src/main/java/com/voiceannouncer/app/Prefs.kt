@@ -59,6 +59,26 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("ringBackup", 0)
         set(v) = sp.edit().putInt("ringBackup", v).apply()
 
+    /** עוצמת ההקראה (שם מתקשר והודעות), באחוזים מעוצמת המדיה המקסימלית. 0 = לא לשנות. */
+    var announceVol: Int
+        get() = sp.getInt("announceVol", 80).coerceIn(0, 100)
+        set(v) = sp.edit().putInt("announceVol", v.coerceIn(0, 100)).apply()
+
+    /** עוצמת הצלצול בזמן שיחה נכנסת (רמה במערכת). 0 = לא לשנות. */
+    var callRingVol: Int
+        get() = sp.getInt("callRingVol", 2).coerceIn(0, 30)
+        set(v) = sp.edit().putInt("callRingVol", v.coerceIn(0, 30)).apply()
+
+    /** גיבוי עוצמת המדיה המקורית בזמן הכרזה (0 = אין). לשחזור אם התהליך נהרג באמצע. */
+    var mediaBackup: Int
+        get() = sp.getInt("mediaBackup", 0)
+        set(v) = sp.edit().putInt("mediaBackup", v).apply()
+
+    /** גיבוי עוצמת הצלצול המקורית בזמן שיחה נכנסת (0 = אין). */
+    var callRingBackup: Int
+        get() = sp.getInt("callRingBackup", 0)
+        set(v) = sp.edit().putInt("callRingBackup", v).apply()
+
     /** אפליקציות נוספות (תזכורות וכו') שהמשתמש אישר להקריא. ברירת מחדל: אף אחת. */
     var readApps: Set<String>
         get() = sp.getStringSet("readApps", emptySet())?.toSet() ?: emptySet()

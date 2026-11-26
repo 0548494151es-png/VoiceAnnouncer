@@ -19,6 +19,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import java.io.File
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * מנוע ההקראה. אובייקט יחיד שחי כל עוד התהליך חי. תמיד נקרא מה-thread הראשי.
@@ -74,6 +75,115 @@ object Speaker {
     // ---- מצב הכרזת שיחה ----
     private var ringRunnable: Runnable? = null
     private var ringSession = 0
+
+    // ---- עוצמות: הקראה (מדיה) וצלצול בזמן שיחה ----
+    private var ringActive = false
+    private var mediaSaved = -1
+    private var mediaApplied = -1
+    private var callRingSaved = -1
+    private var callRingApplied = -1
+    private val mediaRestoreCheck = object : Runnable {
+        override fun run() {
+            val a = app ?: return
+            if (inflight.isNotEmpty() || pending.isNotEmpty() || ringActive || earPlayer != null) {
+                main.postDelayed(this, 2_000L)
+            } else {
+                restoreMedia(a)
+            }
+        }
+    }
+
+    /** מעלה את עוצמת המדיה לעוצמת ההקראה שנבחרה בהגדרות, ומחזיר אותה אחרי שההקראה נגמרת */
+    private fun raiseMedia(ctx: Context) {
+        try {
+            val p = Prefs(ctx)
+            if (p.announceVol <= 0) return
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val target = (max * p.announceVol / 100f).roundToInt().coerceIn(1, max)
+            if (mediaSaved < 0) {
+                mediaSaved = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                p.mediaBackup = mediaSaved.coerceAtLeast(1)
+            }
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+            mediaApplied = target
+            main.removeCallbacks(mediaRestoreCheck)
+            main.postDelayed(mediaRestoreCheck, 4_000L)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun restoreMedia(ctx: Context) {
+        val saved = mediaSaved
+        if (saved < 0) return
+        mediaSaved = -1
+        try {
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            // אם המשתמש שינה את העוצמה ידנית בינתיים - לא דורסים
+            if (am.getStreamVolume(AudioManager.STREAM_MUSIC) == mediaApplied) {
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, saved, 0)
+            }
+        } catch (_: Throwable) {
+        }
+        Prefs(ctx).mediaBackup = 0
+    }
+
+    /** בשיחה נכנסת: קובע את עוצמת הצלצול לפי ההגדרות (רק במצב צלצול רגיל, ולא כשהעוצמה 0) */
+    private fun applyCallRing(ctx: Context) {
+        try {
+            val p = Prefs(ctx)
+            if (p.callRingVol <= 0) return
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (am.ringerMode != AudioManager.RINGER_MODE_NORMAL) return
+            val cur = am.getStreamVolume(AudioManager.STREAM_RING)
+            if (cur <= 0) return
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_RING)
+            val target = p.callRingVol.coerceIn(1, max)
+            if (callRingSaved < 0) {
+                callRingSaved = cur
+                p.callRingBackup = cur
+            }
+            am.setStreamVolume(AudioManager.STREAM_RING, target, 0)
+            callRingApplied = target
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun restoreCallRing(ctx: Context) {
+        val saved = callRingSaved
+        if (saved < 0) return
+        callRingSaved = -1
+        try {
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (am.ringerMode == AudioManager.RINGER_MODE_NORMAL &&
+                am.getStreamVolume(AudioManager.STREAM_RING) == callRingApplied
+            ) {
+                am.setStreamVolume(AudioManager.STREAM_RING, saved, 0)
+            }
+        } catch (_: Throwable) {
+        }
+        Prefs(ctx).callRingBackup = 0
+    }
+
+    /** אם התהליך נהרג כשהעוצמות היו משונות - משחזרים אותן */
+    private fun recoverVolumes(ctx: Context) {
+        if (ringActive) return
+        try {
+            val p = Prefs(ctx)
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (mediaSaved < 0 && p.mediaBackup > 0) {
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, p.mediaBackup, 0)
+                p.mediaBackup = 0
+            }
+            if (callRingSaved < 0 && p.callRingBackup > 0) {
+                if (am.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                    am.setStreamVolume(AudioManager.STREAM_RING, p.callRingBackup, 0)
+                }
+                p.callRingBackup = 0
+            }
+        } catch (_: Throwable) {
+        }
+    }
 
     // ---- השתקת צלצול זמנית ----
     private var muted = false
@@ -394,6 +504,7 @@ object Speaker {
             onDone?.invoke()
             return
         }
+        raiseMedia(ctx)
         t.setPitch(p.pitch)
         t.setSpeechRate(rate ?: p.rate)
         applyVoice(t, p.voice)
@@ -742,6 +853,8 @@ object Speaker {
         app = a
         val p = Prefs(a)
         val session = ++ringSession
+        ringActive = true
+        applyCallRing(a)
         d("התחלת הכרזה: \"$text\" | חזרות=${if (p.repeatForever) "∞" else p.repeatCount.toString()} השתקה=${p.muteRing}")
         val total = if (p.repeatForever) Int.MAX_VALUE else p.repeatCount
         val gapMs = p.repeatGapSec * 1000L
@@ -769,6 +882,7 @@ object Speaker {
 
     fun stopRinging() {
         ringSession++
+        ringActive = false
         ringRunnable?.let { main.removeCallbacks(it) }
         ringRunnable = null
         pending.removeAll { it.ring }
@@ -788,6 +902,10 @@ object Speaker {
         earPlayer = null
         app?.let {
             unmuteRing(it)
+            // שחזור הצלצול אחרי שה-unmute סיים (כדי לא להתנגש איתו). אם התחילה שיחה חדשה בינתיים - מדלגים
+            main.postDelayed({ if (!ringActive) restoreCallRing(it) }, 450L)
+            main.removeCallbacks(mediaRestoreCheck)
+            main.postDelayed(mediaRestoreCheck, 1_500L)
             stopSco(it.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
         }
     }
@@ -865,6 +983,7 @@ object Speaker {
      */
     fun recoverRing(ctx: Context) {
         if (muted) return
+        recoverVolumes(ctx)
         try {
             val p = Prefs(ctx)
             val backup = p.ringBackup
