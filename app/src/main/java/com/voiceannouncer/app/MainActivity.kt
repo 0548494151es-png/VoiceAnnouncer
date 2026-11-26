@@ -134,6 +134,8 @@ private fun Screen(tick: Int) {
     var btAlsoSpeaker by remember { mutableStateOf(prefs.btAlsoSpeaker) }
     var btVoiceRoute by remember { mutableStateOf(prefs.btVoiceRoute) }
     var readApps by remember { mutableStateOf(prefs.readApps) }
+    var appsOpen by remember { mutableStateOf(false) }
+    var scrBtnOn by remember { mutableStateOf(ScreenPrefs.buttonOn(ctx)) }
     var diagTick by remember { mutableIntStateOf(0) }
     var tplKnown by remember { mutableStateOf(prefs.tplKnown) }
     var tplUnknown by remember { mutableStateOf(prefs.tplUnknown) }
@@ -306,6 +308,18 @@ private fun Screen(tick: Int) {
                 }
             }
 
+            // ---- הקראת מסך ----
+            SectionCard("הקראת מסך", "🖥️", Purple) {
+                ToggleRow(
+                    "הצג את הכפתור הצף",
+                    "העיגול הקטן שמקריא את המסך. כיבוי מסיר אותו מיד מהמסך",
+                    scrBtnOn, Purple
+                ) { scrBtnOn = it; ScreenPrefs.setButtonOn(ctx, it) }
+                TextButton(onClick = {
+                    ctx.startActivity(Intent(ctx, ScreenReaderSettingsActivity::class.java))
+                }) { Text("עוד הגדרות של הקראת מסך") }
+            }
+
             // ---- אפליקציות נוספות (תזכורות וכו') ----
             SectionCard("אפליקציות נוספות", "🔔", Blue) {
                 Text(
@@ -322,14 +336,28 @@ private fun Screen(tick: Int) {
                         fontSize = 12.sp, color = Color.Gray
                     )
                 }
-                seen.forEach { (pkg, label) ->
-                    ToggleRow(label, pkg, readApps.contains(pkg), Blue) { on ->
-                        val next = if (on) readApps + pkg else readApps - pkg
-                        readApps = next
-                        prefs.readApps = next
-                    }
+                val marked = seen.count { readApps.contains(it.first) }
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = { appsOpen = !appsOpen },
+                    colors = ButtonDefaults.buttonColors(containerColor = Blue),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        (if (appsOpen) "הסתר את הרשימה" else "בחר אפליקציות להקראה") +
+                            " ($marked מסומנות מתוך ${seen.size})"
+                    )
                 }
-                TextButton(onClick = { diagTick++ }) { Text("↻ רענן את הרשימה") }
+                if (appsOpen) {
+                    seen.forEach { (pkg, label) ->
+                        ToggleRow(label, pkg, readApps.contains(pkg), Blue) { on ->
+                            val next = if (on) readApps + pkg else readApps - pkg
+                            readApps = next
+                            prefs.readApps = next
+                        }
+                    }
+                    TextButton(onClick = { diagTick++ }) { Text("↻ רענן את הרשימה") }
+                }
             }
 
             // ---- הכרזת שיחות ----
